@@ -3,3 +3,17 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
+
+  database:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: mailforensics
+      POSTGRES_PASSWORD: mailforensics
+      POSTGRES_DB: mailforensics
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
