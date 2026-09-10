@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+import os
 import psycopg
 
 app=FastAPI()
@@ -10,10 +11,11 @@ def root():
 @app.get("/db-test")
 def db_test():
     conn=psycopg.connect(
-        host="database",
-        dbname="mailforensics",
-        user="mailforensics",
-        password="mailforensics"
+        host=os.getenv("POSTGRES_HOST"),
+        dbname=os.getenv("POSTGRES_DB"),
+        user=os.getenv("POSTGRES_USER"),
+        password=os.getenv("POSTGRES_PASSWORD"),
+        port=os.getenv("POSTGRES_PORT")
     )
     conn.close()
     return {"message":"Database connection successful"}
