@@ -1,4 +1,6 @@
 fastapi
+python-multipart
 uvicorn[standard]
 psycopg[binary]
 sqlalchemy
+alembic

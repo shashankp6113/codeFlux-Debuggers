@@ -1,4 +1,4 @@
-from sqlalchemy import Column,Integer,String,DateTime,ForeignKey
+from sqlalchemy import Column,Integer,String,Text,DateTime,ForeignKey
 from sqlalchemy.orm import declarative_base,relationship
 from datetime import datetime
 
@@ -27,3 +27,23 @@ class EmailAccount(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
 
     user=relationship("User",back_populates="email_accounts")
+    emails=relationship("Email",back_populates="email_account")
+
+
+class Email(Base):
+    __tablename__="emails"
+
+    id=Column(Integer,primary_key=True,index=True)
+    email_account_id=Column(Integer,ForeignKey("email_accounts.id"),nullable=False)
+    message_id=Column(String,nullable=True)
+    subject=Column(String,nullable=True)
+    sender=Column(String,nullable=False)
+    recipient=Column(String,nullable=False)
+    cc=Column(String,nullable=True)
+    body_text=Column(Text,nullable=True)
+    body_html=Column(Text,nullable=True)
+    raw_headers=Column(Text,nullable=True)
+    received_at=Column(DateTime,nullable=True)
+    created_at=Column(DateTime,default=datetime.utcnow)
+
+    email_account=relationship("EmailAccount",back_populates="emails")

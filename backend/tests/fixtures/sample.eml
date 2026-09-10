@@ -1,0 +1,63 @@
+Received: from mx2.acmecorp.test (mx2.acmecorp.test [198.51.100.42])
+	by mail-relay.globex.test (Postfix) with ESMTPS id 7F3A2C1D4E
+	for <jane.doe@globex.test>; Tue, 08 Jul 2025 10:15:32 +0000 (UTC)
+Received: from smtp-out.acmecorp.test (smtp-out.acmecorp.test [203.0.113.17])
+	by mx2.acmecorp.test (Postfix) with ESMTP id 3B8E9A0012
+	for <jane.doe@globex.test>; Tue, 08 Jul 2025 10:15:30 +0000 (UTC)
+Message-ID: <a1b2c3d4-e5f6-7890-abcd-ef1234567890@acmecorp.test>
+From: John Smith <john.smith@acmecorp.test>
+To: Jane Doe <jane.doe@globex.test>
+Cc: Alex Rivera <alex.rivera@acmecorp.test>
+Subject: Q3 Budget Review - Action Required
+Date: Tue, 08 Jul 2025 10:15:28 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="----=_Part_12345_ABCDE"
+
+------=_Part_12345_ABCDE
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Hi Jane,
+
+Please find the Q3 budget projections attached for your review.
+We need your sign-off by end of day Friday, July 11th.
+
+Key highlights:
+- Engineering headcount increased by 3 positions
+- Cloud infrastructure budget revised to $145,000/month
+- Marketing spend held flat from Q2
+
+Let me know if you have any questions or need the raw spreadsheet.
+
+Best regards,
+John Smith
+Director of Finance
+Acme Corporation
+
+------=_Part_12345_ABCDE
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<html>
+<head>
+<style>body { font-family: Arial, sans-serif; color: #333; }</style>
+</head>
+<body>
+<p>Hi Jane,</p>
+<p>Please find the Q3 budget projections attached for your review.
+We need your sign-off by <strong>end of day Friday, July 11th</strong>.</p>
+<p>Key highlights:</p>
+<ul>
+  <li>Engineering headcount increased by 3 positions</li>
+  <li>Cloud infrastructure budget revised to <strong>$145,000/month</strong></li>
+  <li>Marketing spend held flat from Q2</li>
+</ul>
+<p>Let me know if you have any questions or need the raw spreadsheet.</p>
+<p>Best regards,<br>
+<strong>John Smith</strong><br>
+Director of Finance<br>
+Acme Corporation</p>
+</body>
+</html>
+
+------=_Part_12345_ABCDE--
