@@ -1,10 +1,13 @@
+from dataclasses import asdict
+
 from fastapi import FastAPI, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db
 from models import Email
-from schemas import EmailResponse
+from schemas import EmailResponse, ForensicAnalysisSchema
 from email_parser import parse_eml
+from forensics import analyze_headers
 
 app=FastAPI()
 
@@ -37,7 +40,7 @@ async def upload_email(
     - **file**: the .eml file (required)
     - **email_account_id**: the EmailAccount to associate with (required, dev-only)
 
-    Returns the parsed and stored email record.
+    Returns the parsed and stored email record with forensic analysis.
     """
     # Validate filename
     if not file.filename or not file.filename.lower().endswith(".eml"):
@@ -77,4 +80,14 @@ async def upload_email(
     db.commit()
     db.refresh(db_email)
 
-    return db_email
+    # Run forensic analysis on the raw headers
+    forensics_result = None
+    if parsed.raw_headers:
+        analysis = analyze_headers(parsed.raw_headers)
+        forensics_result = ForensicAnalysisSchema.model_validate(asdict(analysis))
+
+    # Build response combining ORM attributes with forensic analysis
+    response = EmailResponse.model_validate(db_email)
+    response.forensics = forensics_result
+
+    return response

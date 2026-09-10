@@ -1,9 +1,68 @@
 """Pydantic schemas for API request/response validation."""
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel
 
+
+# ---------------------------------------------------------------------------
+# Forensic analysis response schemas
+# ---------------------------------------------------------------------------
+
+class ReceivedHopSchema(BaseModel):
+    """A single Received header parsed into structured fields."""
+
+    hop_number: int
+    source_host: Optional[str] = None
+    destination_host: Optional[str] = None
+    ipv4: Optional[str] = None
+    ipv6: Optional[str] = None
+    timestamp: Optional[str] = None
+    raw: str = ""
+
+
+class AuthenticationHeadersSchema(BaseModel):
+    """Authentication-related headers extracted verbatim."""
+
+    authentication_results: Optional[str] = None
+    received_spf: Optional[str] = None
+    dkim_signature: Optional[str] = None
+    arc_authentication_results: Optional[str] = None
+    arc_seal: Optional[str] = None
+    arc_message_signature: Optional[str] = None
+
+
+class IdentityHeadersSchema(BaseModel):
+    """Identity-related headers extracted verbatim."""
+
+    return_path: Optional[str] = None
+    reply_to: Optional[str] = None
+    from_header: Optional[str] = None
+    to_header: Optional[str] = None
+    message_id: Optional[str] = None
+
+
+class ForensicFlagSchema(BaseModel):
+    """A single forensic observation or inconsistency."""
+
+    rule_id: str
+    severity: str
+    description: str
+    evidence: str
+
+
+class ForensicAnalysisSchema(BaseModel):
+    """Complete forensic analysis result for one email."""
+
+    received_hops: List[ReceivedHopSchema] = []
+    authentication: AuthenticationHeadersSchema = AuthenticationHeadersSchema()
+    identity: IdentityHeadersSchema = IdentityHeadersSchema()
+    flags: List[ForensicFlagSchema] = []
+
+
+# ---------------------------------------------------------------------------
+# Email upload response schema
+# ---------------------------------------------------------------------------
 
 class EmailResponse(BaseModel):
     """Response schema returned after a successful .eml upload."""
@@ -19,5 +78,6 @@ class EmailResponse(BaseModel):
     body_html: Optional[str] = None
     received_at: Optional[datetime] = None
     created_at: datetime
+    forensics: Optional[ForensicAnalysisSchema] = None
 
     model_config = {"from_attributes": True}
