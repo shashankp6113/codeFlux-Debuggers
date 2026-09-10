@@ -1,21 +1,18 @@
-from fastapi import FastAPI
-import os
-import psycopg
+from fastapi import FastAPI, Depends
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from models import Base
+from database import engine, get_db
 
 app=FastAPI()
+
+Base.metadata.create_all(bind=engine)
 
 @app.get("/")
 def root():
     return {"message":"MailForensics AI Backend is running"}
 
 @app.get("/db-test")
-def db_test():
-    conn=psycopg.connect(
-        host=os.getenv("POSTGRES_HOST"),
-        dbname=os.getenv("POSTGRES_DB"),
-        user=os.getenv("POSTGRES_USER"),
-        password=os.getenv("POSTGRES_PASSWORD"),
-        port=os.getenv("POSTGRES_PORT")
-    )
-    conn.close()
+def db_test(db: Session=Depends(get_db)):
+    db.execute(text("SELECT 1"))
     return {"message":"Database connection successful"}
