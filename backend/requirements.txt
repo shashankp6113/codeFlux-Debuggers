@@ -4,3 +4,4 @@ uvicorn[standard]
 psycopg[binary]
 sqlalchemy
 alembic
+httpx
