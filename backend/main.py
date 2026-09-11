@@ -11,6 +11,7 @@ from forensics import analyze_headers
 from scoring import calculate_threat_score
 from ioc_extractor import extract_iocs
 from threat_intel import enrich_iocs, get_provider
+from geolocation import geolocate_ips, get_geolocation_provider
 
 app=FastAPI()
 
@@ -101,6 +102,11 @@ async def upload_email(
     ti_provider = get_provider()
     ti_result = enrich_iocs(ioc_result, provider=ti_provider)
     analysis_dict["threat_intelligence"] = asdict(ti_result)
+
+    # Geolocate IP IOCs (auto-selects provider)
+    geo_provider = get_geolocation_provider()
+    geo_result = geolocate_ips(ioc_result, provider=geo_provider)
+    analysis_dict["geolocation"] = asdict(geo_result)
 
     # Persist forensic analysis (including threat_score, IOCs, and
     # threat intelligence) to database

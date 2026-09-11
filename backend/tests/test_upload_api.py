@@ -1160,3 +1160,93 @@ class TestUploadProviderIntegration:
         ti = r.json()["forensics"]["threat_intelligence"]
         if ti.get("enrichments"):
             assert len(calls) > 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Geolocation integration in upload pipeline
+# ---------------------------------------------------------------------------
+
+class TestUploadGeolocation:
+    """Verify geolocation is integrated into the upload pipeline."""
+
+    def _upload(self):
+        with open(SAMPLE_EML, "rb") as f:
+            return client.post(
+                "/api/emails/upload",
+                data={"email_account_id": 1},
+                files={"file": ("test.eml", f, "message/rfc822")},
+            )
+
+    def _upload_inline(self, eml_bytes):
+        import io
+        return client.post(
+            "/api/emails/upload",
+            data={"email_account_id": 1},
+            files={"file": ("test.eml", io.BytesIO(eml_bytes), "message/rfc822")},
+        )
+
+    def test_geolocation_present_in_response(self):
+        r = self._upload()
+        assert r.status_code == 200
+        forensics = r.json()["forensics"]
+        assert "geolocation" in forensics
+        assert forensics["geolocation"] is not None
+
+    def test_geolocation_has_provider(self):
+        r = self._upload()
+        geo = r.json()["forensics"]["geolocation"]
+        assert geo["provider"] == "noop"
+
+    def test_geolocation_has_results_list(self):
+        r = self._upload()
+        geo = r.json()["forensics"]["geolocation"]
+        assert "results" in geo
+        assert isinstance(geo["results"], list)
+
+    def test_geolocation_has_stats(self):
+        r = self._upload()
+        geo = r.json()["forensics"]["geolocation"]
+        assert "stats" in geo
+
+    def test_geolocation_persisted(self):
+        r = self._upload()
+        email_id = r.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).first()
+        assert fa is not None
+        assert "geolocation" in fa.analysis
+        assert fa.analysis["geolocation"]["provider"] == "noop"
+        db.close()
+
+    def test_no_ip_email_still_succeeds(self):
+        """Email with no IP IOCs → geolocation with empty results."""
+        eml = b"""\
+From: sender@example.test
+To: recipient@dest.test
+Subject: No IPs here
+Content-Type: text/plain
+
+Just some plain text with no IP addresses.
+"""
+        r = self._upload_inline(eml)
+        assert r.status_code == 200
+        geo = r.json()["forensics"]["geolocation"]
+        assert geo["results"] == []
+
+    def test_no_header_email_has_geolocation(self):
+        """Email uploaded with body IOCs still gets geolocation."""
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        assert r.status_code == 200
+        geo = r.json()["forensics"]["geolocation"]
+        assert geo is not None
+        assert geo["provider"] == "noop"
+
+    def test_existing_fields_unchanged(self):
+        """Adding geolocation did not break existing response fields."""
+        r = self._upload()
+        forensics = r.json()["forensics"]
+        assert "ioc_extraction" in forensics
+        assert "threat_intelligence" in forensics
+        assert "received_hops" in forensics
+        assert "authentication" in forensics
+        assert "flags" in forensics

@@ -183,6 +183,30 @@ class ThreatIntelResultSchema(BaseModel):
     provider: str = ""
 
 
+class GeolocationResultSchema(BaseModel):
+    """Geolocation and network metadata for a single IP address."""
+
+    ip: str
+    country: Optional[str] = None
+    country_code: Optional[str] = None
+    city: Optional[str] = None
+    region: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    asn: Optional[str] = None
+    organization: Optional[str] = None
+    provider: str = ""
+    error: Optional[str] = None
+
+
+class GeolocationBatchResultSchema(BaseModel):
+    """Aggregated geolocation results for an IOC extraction batch."""
+
+    results: List[GeolocationResultSchema] = []
+    stats: dict = {}
+    provider: str = ""
+
+
 class ForensicAnalysisSchema(BaseModel):
     """Complete forensic analysis result for one email."""
 
@@ -193,6 +217,7 @@ class ForensicAnalysisSchema(BaseModel):
     threat_score: Optional[ThreatScoreSchema] = None
     ioc_extraction: Optional[IOCExtractionResultSchema] = None
     threat_intelligence: Optional[ThreatIntelResultSchema] = None
+    geolocation: Optional[GeolocationBatchResultSchema] = None
 
 
 # ---------------------------------------------------------------------------

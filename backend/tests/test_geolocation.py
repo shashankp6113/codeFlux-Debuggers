@@ -398,3 +398,121 @@ class TestGeolocationResultDataclass:
         r = GeolocationResult(ip="10.0.0.1", provider="test", error="private")
         assert r.error == "private"
         assert r.country is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: geolocate_ips service function
+# ---------------------------------------------------------------------------
+
+from geolocation import geolocate_ips, GeolocationBatchResult
+from ioc_extractor import IOC, IOCExtractionResult
+
+
+def _ioc(ioc_type, value):
+    return IOC(ioc_type=ioc_type, value=value, source="body_text", context="test")
+
+
+def _ioc_result(iocs):
+    stats = {}
+    for i in iocs:
+        stats[i.ioc_type] = stats.get(i.ioc_type, 0) + 1
+    return IOCExtractionResult(iocs=iocs, stats=stats)
+
+
+class TestGeolocateIpsService:
+    """geolocate_ips() service function behavior."""
+
+    def test_returns_batch_result(self):
+        result = geolocate_ips(_ioc_result([_ioc("ipv4", "8.8.8.8")]))
+        assert isinstance(result, GeolocationBatchResult)
+
+    def test_provider_name(self):
+        result = geolocate_ips(_ioc_result([_ioc("ipv4", "8.8.8.8")]))
+        assert result.provider == "noop"
+
+    def test_ipv4_geolocated(self):
+        result = geolocate_ips(_ioc_result([_ioc("ipv4", "8.8.8.8")]))
+        assert len(result.results) == 1
+        assert result.results[0].ip == "8.8.8.8"
+
+    def test_ipv6_geolocated(self):
+        result = geolocate_ips(_ioc_result([
+            _ioc("ipv6", "2607:f8b0:4004:800::200e"),
+        ]))
+        assert len(result.results) == 1
+
+    def test_domain_skipped(self):
+        result = geolocate_ips(_ioc_result([_ioc("domain", "evil.test")]))
+        assert len(result.results) == 0
+
+    def test_email_skipped(self):
+        result = geolocate_ips(_ioc_result([_ioc("email", "bad@evil.test")]))
+        assert len(result.results) == 0
+
+    def test_url_skipped(self):
+        result = geolocate_ips(_ioc_result([
+            _ioc("url", "http://evil.test/payload"),
+        ]))
+        assert len(result.results) == 0
+
+    def test_mixed_only_ips(self):
+        result = geolocate_ips(_ioc_result([
+            _ioc("ipv4", "8.8.8.8"),
+            _ioc("domain", "evil.test"),
+            _ioc("email", "bad@evil.test"),
+            _ioc("url", "http://evil.test"),
+            _ioc("ipv6", "2001:4860:4860::8888"),
+        ]))
+        assert len(result.results) == 2
+        ips = {r.ip for r in result.results}
+        assert "8.8.8.8" in ips
+        assert "2001:4860:4860::8888" in ips
+
+    def test_deduplication(self):
+        result = geolocate_ips(_ioc_result([
+            _ioc("ipv4", "8.8.8.8"),
+            _ioc("ipv4", "8.8.8.8"),
+            _ioc("ipv4", "8.8.8.8"),
+        ]))
+        assert len(result.results) == 1
+
+    def test_empty_iocs(self):
+        result = geolocate_ips(_ioc_result([]))
+        assert len(result.results) == 0
+        assert result.stats == {}
+
+    def test_private_ip_has_error(self):
+        result = geolocate_ips(_ioc_result([_ioc("ipv4", "10.0.0.1")]))
+        assert len(result.results) == 1
+        assert result.results[0].error is not None
+
+    def test_private_ip_stats(self):
+        result = geolocate_ips(_ioc_result([_ioc("ipv4", "10.0.0.1")]))
+        assert result.stats.get("error", 0) == 1
+
+    def test_public_ip_stats(self):
+        result = geolocate_ips(_ioc_result([_ioc("ipv4", "8.8.8.8")]))
+        assert result.stats.get("ok", 0) == 1
+
+    def test_provider_exception_caught(self):
+        """Provider exception → error result, no crash."""
+
+        class _CrashProvider(IPGeolocationProvider):
+            @property
+            def name(self):
+                return "crash"
+            def geolocate(self, ip):
+                raise RuntimeError("boom")
+
+        result = geolocate_ips(
+            _ioc_result([_ioc("ipv4", "8.8.8.8")]),
+            provider=_CrashProvider(),
+        )
+        assert len(result.results) == 1
+        assert result.results[0].error is not None
+        assert "boom" in result.results[0].error
+
+    def test_default_provider_is_noop(self):
+        """No explicit provider → NoOp."""
+        result = geolocate_ips(_ioc_result([_ioc("ipv4", "8.8.8.8")]))
+        assert result.provider == "noop"

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import abc
 import ipaddress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -236,3 +236,87 @@ def get_geolocation_provider() -> IPGeolocationProvider:
     configuration (e.g. environment variables for MaxMind or ip-api).
     """
     return NoOpGeolocationProvider()
+
+
+# ---------------------------------------------------------------------------
+# Geolocation service
+# ---------------------------------------------------------------------------
+
+_IP_IOC_TYPES = frozenset({"ipv4", "ipv6"})
+
+
+@dataclass
+class GeolocationBatchResult:
+    """Aggregated geolocation results for an IOC extraction batch.
+
+    Attributes:
+        results:   One ``GeolocationResult`` per unique IP IOC.
+        stats:     Counts keyed by outcome (e.g. ``{"ok": 2, "error": 1}``).
+        provider:  Name of the provider used for this batch.
+    """
+
+    results: list = field(default_factory=list)
+    stats: dict = field(default_factory=dict)
+    provider: str = ""
+
+
+def geolocate_ips(
+    ioc_result,
+    provider: Optional[IPGeolocationProvider] = None,
+) -> GeolocationBatchResult:
+    """Geolocate IP IOCs extracted from an email.
+
+    Iterates over the IOCs in *ioc_result*, selecting only ``ipv4``
+    and ``ipv6`` types, deduplicates by normalised value, and calls
+    *provider* for each unique IP.
+
+    If *provider* is ``None`` the :class:`NoOpGeolocationProvider` is
+    used.
+
+    Provider exceptions are caught and recorded in the
+    ``GeolocationResult.error`` field — they never crash the pipeline.
+
+    Args:
+        ioc_result: An ``IOCExtractionResult`` from the IOC extractor.
+        provider:   An ``IPGeolocationProvider`` implementation.
+
+    Returns:
+        A ``GeolocationBatchResult`` with per-IP results and stats.
+    """
+    if provider is None:
+        provider = NoOpGeolocationProvider()
+
+    results = []
+    seen: dict = {}
+
+    for ioc in ioc_result.iocs:
+        if ioc.ioc_type not in _IP_IOC_TYPES:
+            continue
+
+        key = ioc.value.lower()
+        if key in seen:
+            continue
+        seen[key] = None
+
+        try:
+            result = provider.geolocate(ioc.value)
+        except Exception as exc:
+            result = GeolocationResult(
+                ip=ioc.value,
+                provider=provider.name,
+                error=f"Geolocation error: {exc}",
+            )
+
+        results.append(result)
+
+    # Build stats
+    stats: dict = {}
+    for r in results:
+        key = "error" if r.error else "ok"
+        stats[key] = stats.get(key, 0) + 1
+
+    return GeolocationBatchResult(
+        results=results,
+        stats=stats,
+        provider=provider.name,
+    )
