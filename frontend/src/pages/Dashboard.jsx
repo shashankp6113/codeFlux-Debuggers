@@ -5,10 +5,12 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import UploadButton from '../components/UploadButton';
+import GmailConnectButton from '../components/GmailConnectButton';
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -26,10 +28,33 @@ export default function Dashboard() {
     loadDashboard();
   }, []);
 
+  const handleGmailConnect = async (account) => {
+    try {
+      setSyncing(true);
+      await api.syncGmail(account.email_account_id, 10);
+      const summary = await api.getDashboardSummary();
+      setData(summary);
+    } catch (err) {
+      setError("Failed to sync Gmail: " + (err.message || "Unknown error"));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  if (syncing) {
+    return (
+      <div className="empty-state" style={{ minHeight: '60vh' }}>
+        <Loader size={48} className="empty-state-icon animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
+        <h3>Syncing Gmail...</h3>
+        <p>Fetching and analyzing your recent emails.</p>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="empty-state" style={{ minHeight: '60vh' }}>
-        <Loader size={48} className="empty-state-icon" />
+        <Loader size={48} className="empty-state-icon animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
         <h3>Loading Security Overview...</h3>
       </div>
     );
@@ -64,7 +89,10 @@ export default function Dashboard() {
     <div>
       <div className="dashboard-header">
         <h1 className="page-title">Security Overview</h1>
-        <UploadButton label="New Analysis" />
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          <GmailConnectButton onConnect={handleGmailConnect} />
+          <UploadButton label="New Analysis" />
+        </div>
       </div>
 
       <div className="metrics-grid">
@@ -146,7 +174,10 @@ export default function Dashboard() {
               <Inbox size={48} className="empty-state-icon" />
               <h3>No recent investigations</h3>
               <p>Connect an email account or upload an .eml file to start analyzing.</p>
-              <UploadButton label="Import Email" icon={null} />
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', justifyContent: 'center' }}>
+                <GmailConnectButton onConnect={handleGmailConnect} />
+                <UploadButton label="Import Email" icon={null} />
+              </div>
             </div>
           )}
         </div>

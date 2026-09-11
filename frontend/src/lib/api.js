@@ -23,7 +23,6 @@ async function fetchApi(endpoint, options = {}) {
       throw new ApiError(`API Error: ${response.statusText}`, response.status);
     }
 
-    // Some endpoints might return 204 No Content
     if (response.status === 204) return null;
 
     return await response.json();
@@ -36,6 +35,7 @@ async function fetchApi(endpoint, options = {}) {
 export const api = {
   getDashboardSummary: () => fetchApi('/api/dashboard/summary'),
   getEmails: (limit = 50) => fetchApi(`/api/emails?limit=${limit}`),
+  syncGmail: (emailAccountId, limit = 10) => fetchApi(`/api/gmail/${emailAccountId}/messages?limit=${limit}`),
   uploadEmail: async (file) => {
     const formData = new FormData();
     formData.append("file", file);
@@ -47,13 +47,12 @@ export const api = {
       });
 
       if (!response.ok) {
-        // Do not parse error bodies blindly as they might contain backend tracebacks or secrets
         throw new ApiError(`API Error: ${response.statusText}`, response.status);
       }
 
       return await response.json();
     } catch (error) {
-      console.error(`[API Fetch Failed] /api/emails/upload`); // Log generic message, no raw error body
+      console.error(`[API Fetch Failed] /api/emails/upload`);
       throw new Error("Failed to upload email. Please try again.", { cause: error });
     }
   },
