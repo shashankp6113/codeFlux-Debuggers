@@ -348,6 +348,26 @@ class VirusTotalProvider(ThreatIntelProvider):
 
 
 # ---------------------------------------------------------------------------
+# Provider factory
+# ---------------------------------------------------------------------------
+
+def get_provider() -> ThreatIntelProvider:
+    """Return the best available threat-intelligence provider.
+
+    - If ``VIRUSTOTAL_API_KEY`` is set and non-empty, returns a
+      :class:`VirusTotalProvider`.
+    - Otherwise, returns a :class:`NoOpProvider`.
+
+    This function is safe to call at any time — it never raises.
+    """
+    import os
+    key = os.environ.get("VIRUSTOTAL_API_KEY", "").strip()
+    if key:
+        return VirusTotalProvider()
+    return NoOpProvider()
+
+
+# ---------------------------------------------------------------------------
 # Enrichment service
 # ---------------------------------------------------------------------------
 

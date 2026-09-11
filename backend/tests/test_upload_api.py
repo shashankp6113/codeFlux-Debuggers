@@ -1072,3 +1072,91 @@ class TestUploadNoHeaderForensics:
         assert fa is not None
         assert "threat_intelligence" in fa.analysis
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Provider integration in upload pipeline
+# ---------------------------------------------------------------------------
+
+class TestUploadProviderIntegration:
+    """Verify get_provider() integration in the upload endpoint."""
+
+    def _upload(self):
+        with open(SAMPLE_EML, "rb") as f:
+            return client.post(
+                "/api/emails/upload",
+                data={"email_account_id": 1},
+                files={"file": ("test.eml", f, "message/rfc822")},
+            )
+
+    def test_no_api_key_uses_noop(self, monkeypatch):
+        """Without VIRUSTOTAL_API_KEY, upload uses NoOpProvider."""
+        monkeypatch.delenv("VIRUSTOTAL_API_KEY", raising=False)
+        r = self._upload()
+        assert r.status_code == 200
+        ti = r.json()["forensics"]["threat_intelligence"]
+        assert ti["provider"] == "noop"
+
+    def test_no_api_key_upload_succeeds(self, monkeypatch):
+        monkeypatch.delenv("VIRUSTOTAL_API_KEY", raising=False)
+        r = self._upload()
+        assert r.status_code == 200
+        assert r.json()["forensics"] is not None
+
+    def test_configured_key_selects_vt(self, monkeypatch):
+        """With VIRUSTOTAL_API_KEY set, upload uses VirusTotalProvider."""
+        monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test-key")
+        # Mock httpx.get so no real request is made — return not_enriched
+        def _mock_get(*args, **kwargs):
+            class _Resp:
+                status_code = 200
+                def json(self):
+                    return {"data": {"attributes": {"last_analysis_stats": {}}}}
+                def raise_for_status(self):
+                    pass
+            return _Resp()
+        monkeypatch.setattr("httpx.get", _mock_get)
+        r = self._upload()
+        assert r.status_code == 200
+        ti = r.json()["forensics"]["threat_intelligence"]
+        assert ti["provider"] == "virustotal"
+
+    def test_provider_error_does_not_break_upload(self, monkeypatch):
+        """If VT provider errors, upload still succeeds with error info."""
+        monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test-key")
+        import httpx as _httpx
+        def _mock_timeout(*args, **kwargs):
+            raise _httpx.TimeoutException("timed out")
+        monkeypatch.setattr("httpx.get", _mock_timeout)
+        r = self._upload()
+        assert r.status_code == 200
+        ti = r.json()["forensics"]["threat_intelligence"]
+        assert ti["provider"] == "virustotal"
+        # Enrichments should have errors but upload should not fail
+        for e in ti.get("enrichments", []):
+            assert e["verdict"] == "not_enriched"
+            assert e["error"] is not None
+
+    def test_configured_provider_passed_to_pipeline(self, monkeypatch):
+        """Verify the selected provider is actually used by enrich_iocs."""
+        monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test-key")
+        # Track that httpx.get is actually called (VT provider used)
+        calls = []
+        def _mock_get(*args, **kwargs):
+            calls.append(True)
+            class _Resp:
+                status_code = 200
+                def json(self):
+                    return {"data": {"attributes": {
+                        "last_analysis_stats": {"harmless": 70, "undetected": 10},
+                    }}}
+                def raise_for_status(self):
+                    pass
+            return _Resp()
+        monkeypatch.setattr("httpx.get", _mock_get)
+        r = self._upload()
+        assert r.status_code == 200
+        # If there are enrichable IOCs, httpx.get should have been called
+        ti = r.json()["forensics"]["threat_intelligence"]
+        if ti.get("enrichments"):
+            assert len(calls) > 0

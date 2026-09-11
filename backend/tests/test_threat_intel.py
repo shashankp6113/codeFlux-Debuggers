@@ -1187,3 +1187,42 @@ class TestVirusTotalVerdictMapping:
         for stats in test_cases:
             v, _ = VirusTotalProvider._compute_verdict(stats)
             assert v in VALID_VERDICTS, f"verdict {v!r} not in VALID_VERDICTS for {stats}"
+
+
+# ---------------------------------------------------------------------------
+# get_provider factory tests
+# ---------------------------------------------------------------------------
+
+from threat_intel import get_provider
+
+
+class TestGetProvider:
+    """Provider selection based on VIRUSTOTAL_API_KEY."""
+
+    def test_no_key_returns_noop(self, monkeypatch):
+        monkeypatch.delenv("VIRUSTOTAL_API_KEY", raising=False)
+        p = get_provider()
+        assert isinstance(p, NoOpProvider)
+        assert p.name == "noop"
+
+    def test_key_set_returns_virustotal(self, monkeypatch):
+        monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test-key-123")
+        p = get_provider()
+        assert isinstance(p, VirusTotalProvider)
+        assert p.name == "virustotal"
+
+    def test_empty_key_returns_noop(self, monkeypatch):
+        monkeypatch.setenv("VIRUSTOTAL_API_KEY", "")
+        p = get_provider()
+        assert isinstance(p, NoOpProvider)
+
+    def test_whitespace_key_returns_noop(self, monkeypatch):
+        monkeypatch.setenv("VIRUSTOTAL_API_KEY", "   ")
+        p = get_provider()
+        assert isinstance(p, NoOpProvider)
+
+    def test_enrich_iocs_default_still_noop(self):
+        """enrich_iocs() without explicit provider still uses NoOp."""
+        iocs = _make_result([_make_ioc("ipv4", "1.2.3.4")])
+        result = enrich_iocs(iocs)
+        assert result.provider == "noop"
