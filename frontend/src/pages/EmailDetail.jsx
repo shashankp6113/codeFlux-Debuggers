@@ -105,24 +105,37 @@ export default function EmailDetail() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         {/* AI Analysis */}
-        {ai.summary && (
+        {(ai.summary || ai.error) && (
           <div className="card">
             <h2 className="card-title"><Cpu size={18} /> AI Forensic Analysis</h2>
-            <div style={{ backgroundColor: 'var(--bg-dark)', padding: '1rem', borderRadius: '6px', marginBottom: '1rem' }}>
-              <strong>Summary:</strong> {ai.summary}
-            </div>
-            {ai.explanation && (
-              <div style={{ marginBottom: '1rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                {ai.explanation}
+            
+            {ai.error ? (
+              <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid #ef4444', color: '#ef4444', padding: '1rem', borderRadius: '6px', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                <AlertTriangle size={20} />
+                <div>
+                  <strong>AI Analysis Unavailable</strong>
+                  <div style={{ fontSize: '0.9rem', marginTop: '0.25rem' }}>The AI provider failed to analyze this email. This may be due to rate limits or configuration issues.</div>
+                </div>
               </div>
-            )}
-            {ai.recommended_actions?.length > 0 && (
-              <div>
-                <strong style={{ fontSize: '0.9rem' }}>Recommended Actions:</strong>
-                <ul style={{ marginLeft: '1.5rem', marginTop: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                  {ai.recommended_actions.map((act, i) => <li key={i}>{act}</li>)}
-                </ul>
-              </div>
+            ) : (
+              <>
+                <div style={{ backgroundColor: 'var(--bg-dark)', padding: '1rem', borderRadius: '6px', marginBottom: '1rem' }}>
+                  <strong>Summary:</strong> {ai.summary}
+                </div>
+                {ai.explanation && (
+                  <div style={{ marginBottom: '1rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                    {ai.explanation}
+                  </div>
+                )}
+                {ai.recommended_actions?.length > 0 && (
+                  <div>
+                    <strong style={{ fontSize: '0.9rem' }}>Recommended Actions:</strong>
+                    <ul style={{ marginLeft: '1.5rem', marginTop: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                      {ai.recommended_actions.map((act, i) => <li key={i}>{act}</li>)}
+                    </ul>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

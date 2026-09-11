@@ -34,6 +34,26 @@ SAMPLE_EML = os.path.join(FIXTURES_DIR, "sample.eml")
 # Test database setup
 # ---------------------------------------------------------------------------
 
+
+class _MockAIProvider:
+    def analyze(self, evidence):
+        from ai_analysis import AIAnalysisResult
+        return AIAnalysisResult(
+            classification="suspicious",
+            confidence=0.82,
+            summary="Test AI summary",
+            explanation="Test AI explanation",
+            recommended_actions=["Test AI action 1", "Test AI action 2"],
+            provider="mock-gemini",
+            error=None
+        )
+
+@pytest.fixture(autouse=True)
+def mock_gemini_globally(monkeypatch):
+    """Ensure no test in this file hits the live Gemini API."""
+    monkeypatch.setattr("analysis.get_ai_provider", lambda: _MockAIProvider())
+
+
 @pytest.fixture(autouse=True)
 def setup_db():
     """Create tables and seed a test EmailAccount for each test."""
@@ -1382,3 +1402,42 @@ class TestUploadAIAnalysis:
         for sensitive in ["api_key", "access_token", "refresh_token",
                           "client_secret", "password", "bearer"]:
             assert sensitive not in response_str.lower()
+
+def test_upload_with_ai_failure():
+    """Test that a 429/failure from Gemini is handled gracefully and returns the error in the API response."""
+    sample_path = os.path.join(FIXTURES_DIR, "sample.eml")
+    
+    # We patch the global client fixture logic temporarily for this test
+    # by mocking get_ai_provider to fail
+    class _FailAIProvider:
+        @property
+        def name(self): return "gemini"
+        def analyze(self, evidence):
+            from ai_analysis import AIAnalysisResult
+            return AIAnalysisResult(
+                classification="unknown",
+                confidence=None,
+                summary=None,
+                explanation=None,
+                recommended_actions=[],
+                provider="gemini",
+                error="Gemini rate limit exceeded (HTTP 429)"
+            )
+            
+    import pytest
+    from unittest import mock
+    
+    with mock.patch("analysis.get_ai_provider", return_value=_FailAIProvider()):
+        with open(sample_path, "rb") as f:
+            response = client.post(
+                "/api/emails/upload",
+                files={"file": ("sample.eml", f, "message/rfc822")},
+            )
+            
+    assert response.status_code == 200
+    data = response.json()
+    ai = data["forensics"]["ai_analysis"]
+    
+    assert ai["classification"] == "unknown"
+    assert "429" in ai["error"]
+    assert data["forensics"]["threat_score"]["score"] is not None # Deterministic pipeline survived
