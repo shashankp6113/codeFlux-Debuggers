@@ -202,7 +202,7 @@ class TestForensicAnalysisModel:
         email = self._seed_email(db)
         payload = {
             "received_hops": [{"hop_number": 1, "source_host": "mx.test"}],
-            "authentication": {"dkim_signature": "v=1; a=rsa-sha256"},
+            "authentication": {"all_dkim_signatures": ["v=1; a=rsa-sha256"]},
             "identity": {"from_header": "sender@test.local"},
             "flags": [{"rule_id": "TEST_RULE", "severity": "info",
                         "description": "test", "evidence": "test"}],
@@ -214,7 +214,7 @@ class TestForensicAnalysisModel:
         loaded = db.query(ForensicAnalysis).filter_by(email_id=email.id).one()
         assert loaded.analysis["received_hops"][0]["source_host"] == "mx.test"
         assert loaded.analysis["flags"][0]["rule_id"] == "TEST_RULE"
-        assert loaded.analysis["authentication"]["dkim_signature"] == "v=1; a=rsa-sha256"
+        assert loaded.analysis["authentication"]["all_dkim_signatures"] == ["v=1; a=rsa-sha256"]
         db.close()
 
     def test_one_to_one_relationship_from_email(self):

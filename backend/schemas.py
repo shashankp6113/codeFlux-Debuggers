@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -21,21 +21,76 @@ class ReceivedHopSchema(BaseModel):
     raw: str = ""
 
 
-class AuthenticationHeadersSchema(BaseModel):
-    """Authentication-related headers extracted verbatim."""
 
+class AuthResultEntrySchema(BaseModel):
+    """One parsed Authentication-Results header with its authserv-id."""
+
+    authserv_id: str = ""
+    raw: str = ""
+    spf: Optional[str] = None
+    dkim: Optional[str] = None
+    dmarc: Optional[str] = None
+
+
+class AuthenticationHeadersSchema(BaseModel):
+    """Authentication-related headers extracted verbatim.
+
+    Multi-header fields (``all_*``) preserve every occurrence in
+    original header order.  The singular fields
+    (``authentication_results``, ``received_spf``, ``dkim_signature``)
+    are populated from the first list item for backward compatibility.
+    """
+
+    # All occurrences in header order
+    all_authentication_results: List[str] = []
+    all_received_spf: List[str] = []
+    all_dkim_signatures: List[str] = []
+
+    # Backward-compatible singular fields (first item or None)
     authentication_results: Optional[str] = None
     received_spf: Optional[str] = None
     dkim_signature: Optional[str] = None
+
+    # ARC headers (still singular)
     arc_authentication_results: Optional[str] = None
     arc_seal: Optional[str] = None
     arc_message_signature: Optional[str] = None
 
-    # Structured verdicts parsed from raw headers
+    # Structured verdicts (first Authentication-Results header)
     spf_verdict: Optional[str] = None
     dkim_verdict: Optional[str] = None
     dmarc_verdict: Optional[str] = None
     received_spf_verdict: Optional[str] = None
+
+    # All verdicts across all headers
+    all_spf_verdicts: List[str] = []
+    all_dkim_verdicts: List[str] = []
+    all_dmarc_verdicts: List[str] = []
+    all_received_spf_verdicts: List[str] = []
+
+    # Per-header structured entries with authserv-id
+    auth_results_entries: List[AuthResultEntrySchema] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_singular_fields(cls, data):
+        """Auto-populate singular fields from list fields for backward compat.
+
+        When data comes from ``dataclasses.asdict()`` the ``@property``
+        fields on the dataclass are not included, so the singular fields
+        would be ``None``.  This validator fills them from the lists.
+        """
+        if isinstance(data, dict):
+            ar = data.get("all_authentication_results") or []
+            if ar and data.get("authentication_results") is None:
+                data["authentication_results"] = ar[0]
+            rs = data.get("all_received_spf") or []
+            if rs and data.get("received_spf") is None:
+                data["received_spf"] = rs[0]
+            dk = data.get("all_dkim_signatures") or []
+            if dk and data.get("dkim_signature") is None:
+                data["dkim_signature"] = dk[0]
+        return data
 
 
 class IdentityHeadersSchema(BaseModel):
