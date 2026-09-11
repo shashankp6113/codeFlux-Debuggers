@@ -1,12 +1,14 @@
 from dataclasses import asdict
 
+from typing import List
+
 from fastapi import FastAPI, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db
 from models import Email, EmailAccount, User, ForensicAnalysis as ForensicAnalysisRecord
-from schemas import EmailResponse, ForensicAnalysisSchema
+from schemas import EmailResponse, ForensicAnalysisSchema, DashboardSummarySchema
 from email_parser import parse_eml
 from analysis import run_email_analysis
 from gmail_oauth import (
@@ -144,6 +146,118 @@ def gmail_auth_callback(
         "email_address": account.email_address,
         "provider": account.provider,
     }
+
+# ---------------------------------------------------------------------------
+# Dashboard and Read-Only Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/emails", response_model=List[EmailResponse])
+def list_emails(limit: int = 50, db: Session = Depends(get_db)):
+    """Return a list of persisted emails, newest first."""
+    emails = db.query(Email).order_by(Email.received_at.desc()).limit(limit).all()
+    responses = []
+    for email in emails:
+        resp = EmailResponse.model_validate(email)
+        fa = db.query(ForensicAnalysisRecord).filter_by(email_id=email.id).first()
+        if fa and fa.analysis:
+            resp.forensics = ForensicAnalysisSchema.model_validate(fa.analysis)
+        responses.append(resp)
+    return responses
+
+
+@app.get("/api/dashboard/summary", response_model=DashboardSummarySchema)
+def get_dashboard_summary(db: Session = Depends(get_db)):
+    """Return aggregated statistics and recent data for the dashboard."""
+    # We load all forensic records for calculating accurate stats (in production we'd use optimized queries)
+    # But since this is SQLite and a small demo, this is fine. Or we can query JSON fields using SQLAlchemy if supported.
+    # For now, let's just do it in python memory for safety since JSON querying in SQLite is sometimes tricky.
+    
+    # Get total emails
+    total_emails = db.query(Email).count()
+    
+    threats_detected = 0
+    high_risk = 0
+    critical = 0
+    
+    threat_dist = {}
+    ioc_summ = {}
+    
+    all_fa = db.query(ForensicAnalysisRecord).all()
+    for fa in all_fa:
+        if not fa.analysis:
+            continue
+            
+        analysis = fa.analysis
+        
+        # Check if email is a threat based on any engine
+        is_threat = False
+        
+        # 1. Threat score / Risk level (deterministic)
+        threat_score_info = analysis.get("threat_score")
+        if threat_score_info:
+            risk = threat_score_info.get("risk_level", "low").lower()
+            if risk in ["medium", "high", "critical"]:
+                is_threat = True
+            
+            # High and Critical cards only use deterministic risk
+            if risk == "high":
+                high_risk += 1
+            elif risk == "critical":
+                critical += 1
+                
+        # 2. Threat distribution (AI classifications)
+        ai_info = analysis.get("ai_analysis")
+        if ai_info:
+            cls = ai_info.get("classification", "unknown").lower()
+            threat_dist[cls] = threat_dist.get(cls, 0) + 1
+            if cls in ["suspicious", "malicious"]:
+                is_threat = True
+            
+        # 3. IOC summary and Threat Intel
+        ioc_info = analysis.get("ioc_extraction")
+        if ioc_info:
+            iocs = ioc_info.get("iocs", [])
+            for ioc in iocs:
+                ioc_type = ioc.get("ioc_type", "unknown")
+                ioc_summ[ioc_type] = ioc_summ.get(ioc_type, 0) + 1
+                
+        ti_info = analysis.get("threat_intelligence")
+        if ti_info:
+            enrichments = ti_info.get("enrichments", [])
+            for enrich in enrichments:
+                verdict = enrich.get("verdict", "unknown").lower()
+                if verdict in ["suspicious", "malicious"]:
+                    is_threat = True
+                    # Only need one malicious indicator to flag the email
+                    break
+                    
+        if is_threat:
+            threats_detected += 1
+                
+    # Get recent investigations
+    recent_emails = db.query(Email).order_by(Email.received_at.desc()).limit(5).all()
+    recent_responses = []
+    for email in recent_emails:
+        resp = EmailResponse.model_validate(email)
+        fa = db.query(ForensicAnalysisRecord).filter_by(email_id=email.id).first()
+        if fa and fa.analysis:
+            resp.forensics = ForensicAnalysisSchema.model_validate(fa.analysis)
+        recent_responses.append(resp)
+        
+    return {
+        "total_emails": total_emails,
+        "threats_detected": threats_detected,
+        "high_risk": high_risk,
+        "critical": critical,
+        "recent_investigations": recent_responses,
+        "threat_distribution": threat_dist,
+        "ioc_summary": ioc_summ
+    }
+
+
+# ---------------------------------------------------------------------------
+# Email Upload Endpoint
+# ---------------------------------------------------------------------------
 
 @app.post("/api/emails/upload", response_model=EmailResponse)
 async def upload_email(

@@ -254,3 +254,16 @@ class EmailResponse(BaseModel):
     forensics: Optional[ForensicAnalysisSchema] = None
 
     model_config = {"from_attributes": True}
+
+
+class DashboardSummarySchema(BaseModel):
+    """Aggregated statistics and recent data for the dashboard."""
+
+    total_emails: int
+    threats_detected: int
+    high_risk: int
+    critical: int
+    recent_investigations: List[EmailResponse]
+    threat_distribution: dict
+    ioc_summary: dict
+
