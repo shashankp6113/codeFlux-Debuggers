@@ -578,3 +578,209 @@ class TestBase64UrlDecoding:
         monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
         result = get_raw_message("tok", "msg1")
         assert result == raw
+
+
+# ---------------------------------------------------------------------------
+# Tests: Gmail analysis pipeline integration
+# ---------------------------------------------------------------------------
+
+# Sample EML with Authentication-Results to trigger header forensics
+SAMPLE_EML_WITH_AUTH = b"""\
+From: sender@example.com
+To: recipient@dest.com
+Subject: Gmail with auth headers
+Date: Thu, 01 Jan 2026 12:00:00 +0000
+Message-ID: <msg-auth-001@example.com>
+Authentication-Results: mx.example.com; spf=pass smtp.mailfrom=example.com
+Received: from mail.example.com (mail.example.com [8.8.8.8])
+        by mx.dest.com with ESMTP; Thu, 01 Jan 2026 12:00:00 +0000
+Content-Type: text/plain
+
+Body with an IP 8.8.8.8 and a URL http://evil.test/payload for IOC testing.
+"""
+
+# Minimal EML without raw headers scenario (body only, no Received/Auth)
+SAMPLE_EML_MINIMAL = b"""\
+From: min@example.com
+To: dest@example.com
+Subject: Minimal
+Date: Thu, 01 Jan 2026 12:00:00 +0000
+Message-ID: <msg-min-001@example.com>
+Content-Type: text/plain
+
+Just a plain body with 10.0.0.1 for IOC testing.
+"""
+
+
+class TestGmailAnalysisPipeline:
+    """Verify Gmail-synced emails receive the full forensic analysis."""
+
+    def _sync_one(self, monkeypatch, eml_bytes=None):
+        """Sync one message and return (account_id, db)."""
+        if eml_bytes is None:
+            eml_bytes = SAMPLE_EML_WITH_AUTH
+        _mock_gmail_api(monkeypatch, raw_bytes=eml_bytes)
+        acct_id = _seed_gmail_account()
+        db = TestSession()
+        result = sync_gmail_messages(acct_id, "tok", db, limit=5)
+        assert result.persisted == 1, f"Expected 1 persisted, got {result}"
+        return acct_id, db
+
+    def test_forensic_analysis_record_created(self, monkeypatch):
+        acct_id, db = self._sync_one(monkeypatch)
+        email_row = db.query(Email).filter_by(email_account_id=acct_id).first()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_row.id).first()
+        assert fa is not None
+        assert isinstance(fa.analysis, dict)
+        db.close()
+
+    def test_ioc_extraction_present(self, monkeypatch):
+        acct_id, db = self._sync_one(monkeypatch)
+        email_row = db.query(Email).filter_by(email_account_id=acct_id).first()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_row.id).first()
+        assert "ioc_extraction" in fa.analysis
+        assert "iocs" in fa.analysis["ioc_extraction"]
+        db.close()
+
+    def test_threat_intelligence_present(self, monkeypatch):
+        acct_id, db = self._sync_one(monkeypatch)
+        email_row = db.query(Email).filter_by(email_account_id=acct_id).first()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_row.id).first()
+        assert "threat_intelligence" in fa.analysis
+        assert "provider" in fa.analysis["threat_intelligence"]
+        db.close()
+
+    def test_geolocation_present(self, monkeypatch):
+        acct_id, db = self._sync_one(monkeypatch)
+        email_row = db.query(Email).filter_by(email_account_id=acct_id).first()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_row.id).first()
+        assert "geolocation" in fa.analysis
+        assert "provider" in fa.analysis["geolocation"]
+        db.close()
+
+    def test_header_forensics_with_auth_headers(self, monkeypatch):
+        """Email with Authentication-Results gets header forensics."""
+        acct_id, db = self._sync_one(monkeypatch, SAMPLE_EML_WITH_AUTH)
+        email_row = db.query(Email).filter_by(email_account_id=acct_id).first()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_row.id).first()
+        # Header forensics fields should be present
+        assert "authentication" in fa.analysis
+        assert "received_hops" in fa.analysis
+        db.close()
+
+    def test_threat_score_with_headers(self, monkeypatch):
+        """Email with raw headers gets a threat score."""
+        acct_id, db = self._sync_one(monkeypatch, SAMPLE_EML_WITH_AUTH)
+        email_row = db.query(Email).filter_by(email_account_id=acct_id).first()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_row.id).first()
+        assert "threat_score" in fa.analysis
+        assert "score" in fa.analysis["threat_score"]
+        db.close()
+
+    def test_no_header_email_still_gets_ioc_ti_geo(self, monkeypatch):
+        """Minimal email without auth headers still gets IOC/TI/geo."""
+        acct_id, db = self._sync_one(monkeypatch, SAMPLE_EML_MINIMAL)
+        email_row = db.query(Email).filter_by(email_account_id=acct_id).first()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_row.id).first()
+        assert fa is not None
+        assert "ioc_extraction" in fa.analysis
+        assert "threat_intelligence" in fa.analysis
+        assert "geolocation" in fa.analysis
+        db.close()
+
+    def test_duplicate_skip_no_duplicate_analysis(self, monkeypatch):
+        """Duplicate message does not create a second ForensicAnalysis."""
+        _mock_gmail_api(monkeypatch, raw_bytes=SAMPLE_EML_WITH_AUTH)
+        acct_id = _seed_gmail_account()
+        db = TestSession()
+
+        # First sync
+        result1 = sync_gmail_messages(acct_id, "tok", db, limit=5)
+        assert result1.persisted == 1
+
+        # Second sync — should be skipped
+        result2 = sync_gmail_messages(acct_id, "tok", db, limit=5)
+        assert result2.skipped_duplicate == 1
+        assert result2.persisted == 0
+
+        # Exactly one ForensicAnalysis row
+        email_row = db.query(Email).filter_by(email_account_id=acct_id).first()
+        fa_count = db.query(ForensicAnalysis).filter_by(
+            email_id=email_row.id
+        ).count()
+        assert fa_count == 1
+        db.close()
+
+    def test_analysis_failure_does_not_stop_batch(self, monkeypatch):
+        """If analysis fails for one message, others still proceed."""
+        messages = [
+            {"id": "good1", "threadId": "t1"},
+            {"id": "good2", "threadId": "t2"},
+        ]
+        list_resp = _FakeResp(200, {"messages": messages})
+        call_count = [0]
+
+        def _mock_get(url, **kwargs):
+            if "/messages/" in url and "/messages?" not in url:
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return _FakeResp(200, {"raw": _b64url(SAMPLE_EML)})
+                else:
+                    return _FakeResp(200, {"raw": _b64url(SAMPLE_EML_2)})
+            elif "/messages" in url:
+                return list_resp
+            return _FakeResp(404)
+
+        monkeypatch.setattr("httpx.get", _mock_get)
+
+        # Monkey-patch run_email_analysis to fail on the first call
+        original_run = None
+        fail_count = [0]
+
+        import analysis as analysis_mod
+        original_run = analysis_mod.run_email_analysis
+
+        def _failing_analysis(parsed, db_email, db):
+            fail_count[0] += 1
+            if fail_count[0] == 1:
+                raise RuntimeError("Simulated analysis failure")
+            return original_run(parsed, db_email, db)
+
+        monkeypatch.setattr(analysis_mod, "run_email_analysis", _failing_analysis)
+
+        acct_id = _seed_gmail_account()
+        db = TestSession()
+        result = sync_gmail_messages(acct_id, "tok", db, limit=10)
+
+        # Both messages should be persisted (Email rows)
+        assert result.persisted == 2
+        # One analysis error should be recorded
+        assert len(result.errors) == 1
+        assert "analysis failed" in result.errors[0]
+
+        # Second email should still have its ForensicAnalysis
+        emails = db.query(Email).filter_by(email_account_id=acct_id).all()
+        assert len(emails) == 2
+
+        # At least one ForensicAnalysis should exist
+        fa_count = db.query(ForensicAnalysis).count()
+        assert fa_count >= 1
+        db.close()
+
+    def test_endpoint_returns_analysis_data(self, monkeypatch):
+        """The endpoint response reflects analysis was run."""
+        acct_id = _seed_gmail_account()
+        _mock_gmail_api(monkeypatch, raw_bytes=SAMPLE_EML_WITH_AUTH)
+        r = client.get(f"/api/gmail/{acct_id}/messages")
+        assert r.status_code == 200
+        assert r.json()["persisted"] == 1
+
+        # Verify the ForensicAnalysis was persisted via DB
+        db = TestSession()
+        email_row = db.query(Email).filter_by(email_account_id=acct_id).first()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_row.id).first()
+        assert fa is not None
+        assert "ioc_extraction" in fa.analysis
+        assert "threat_intelligence" in fa.analysis
+        assert "geolocation" in fa.analysis
+        db.close()

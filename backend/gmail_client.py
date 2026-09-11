@@ -214,7 +214,7 @@ def sync_gmail_messages(
     db_session,
     limit: int = _DEFAULT_LIMIT,
 ) -> GmailSyncResult:
-    """Retrieve and persist Gmail messages for an EmailAccount.
+    """Retrieve, persist, and analyse Gmail messages for an EmailAccount.
 
     Args:
         account_id:   The EmailAccount.id to associate messages with.
@@ -226,6 +226,7 @@ def sync_gmail_messages(
         A ``GmailSyncResult`` summarising the operation.
     """
     from models import Email
+    from analysis import run_email_analysis
 
     effective_limit = max(1, min(limit, _MAX_LIMIT))
     result = GmailSyncResult()
@@ -237,7 +238,7 @@ def sync_gmail_messages(
         result.errors.append(str(exc))
         return result
 
-    # 2. Retrieve and convert each message
+    # 2. Retrieve, convert, persist, and analyse each message
     for ref in refs:
         result.fetched += 1
 
@@ -263,7 +264,7 @@ def sync_gmail_messages(
                 result.skipped_duplicate += 1
                 continue
 
-        # 4. Persist
+        # 4. Persist the Email row
         db_email = Email(
             email_account_id=account_id,
             message_id=parsed.message_id,
@@ -277,9 +278,19 @@ def sync_gmail_messages(
             received_at=parsed.received_at,
         )
         db_session.add(db_email)
+        db_session.commit()
+        db_session.refresh(db_email)
         result.persisted += 1
 
-    if result.persisted > 0:
-        db_session.commit()
+        # 5. Run the full analysis pipeline (header forensics, scoring,
+        #    IOC extraction, threat intel, geolocation, persistence)
+        try:
+            run_email_analysis(parsed, db_email, db_session)
+        except Exception as exc:
+            result.errors.append(
+                f"Message {ref.id}: analysis failed: {exc}"
+            )
+            # The Email row is already persisted — continue with the
+            # remaining messages.
 
     return result

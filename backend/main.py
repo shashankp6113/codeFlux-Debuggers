@@ -8,11 +8,7 @@ from database import get_db
 from models import Email, EmailAccount, User, ForensicAnalysis as ForensicAnalysisRecord
 from schemas import EmailResponse, ForensicAnalysisSchema
 from email_parser import parse_eml
-from forensics import analyze_headers
-from scoring import calculate_threat_score
-from ioc_extractor import extract_iocs
-from threat_intel import enrich_iocs, get_provider
-from geolocation import geolocate_ips, get_geolocation_provider
+from analysis import run_email_analysis
 from gmail_oauth import (
     get_oauth_config,
     build_authorization_url,
@@ -209,39 +205,8 @@ async def upload_email(
     db.commit()
     db.refresh(db_email)
 
-    # Run forensic analysis on the raw headers (if available)
-    analysis_dict: dict = {}
-    if parsed.raw_headers:
-        analysis = analyze_headers(parsed.raw_headers)
-        analysis_dict = asdict(analysis)
-
-        # Compute deterministic threat score from forensic flags
-        threat_score = calculate_threat_score(analysis)
-        analysis_dict["threat_score"] = asdict(threat_score)
-
-    # Extract IOCs from the full parsed email (always)
-    ioc_result = extract_iocs(parsed)
-    analysis_dict["ioc_extraction"] = asdict(ioc_result)
-
-    # Enrich IOCs with threat intelligence (auto-selects provider)
-    ti_provider = get_provider()
-    ti_result = enrich_iocs(ioc_result, provider=ti_provider)
-    analysis_dict["threat_intelligence"] = asdict(ti_result)
-
-    # Geolocate IP IOCs (auto-selects provider)
-    geo_provider = get_geolocation_provider()
-    geo_result = geolocate_ips(ioc_result, provider=geo_provider)
-    analysis_dict["geolocation"] = asdict(geo_result)
-
-    # Persist forensic analysis (including threat_score, IOCs, and
-    # threat intelligence) to database
-    db_forensic = ForensicAnalysisRecord(
-        email_id=db_email.id,
-        analysis=analysis_dict,
-    )
-    db.add(db_forensic)
-    db.commit()
-    db.refresh(db_forensic)
+    # Run unified analysis pipeline
+    analysis_dict = run_email_analysis(parsed, db_email, db)
 
     forensics_result = ForensicAnalysisSchema.model_validate(analysis_dict)
 
