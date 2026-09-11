@@ -748,3 +748,228 @@ class TestMinimalEmailIOC:
         ipv4s = [i for i in ioc_data["iocs"] if i["ioc_type"] == "ipv4"]
         assert len(ipv4s) == 0
 
+
+# ---------------------------------------------------------------------------
+# Tests: Threat intelligence in upload response
+# ---------------------------------------------------------------------------
+
+class TestUploadThreatIntelligence:
+    """Verify threat intelligence data appears in upload response."""
+
+    def _upload(self):
+        with open(SAMPLE_EML, "rb") as f:
+            return client.post(
+                "/api/emails/upload",
+                files={"file": ("sample.eml", f, "message/rfc822")},
+                data={"email_account_id": "1"},
+            )
+
+    def test_threat_intelligence_present(self):
+        resp = self._upload()
+        forensics = resp.json()["forensics"]
+        assert "threat_intelligence" in forensics
+        assert forensics["threat_intelligence"] is not None
+
+    def test_has_enrichments_list(self):
+        resp = self._upload()
+        ti = resp.json()["forensics"]["threat_intelligence"]
+        assert "enrichments" in ti
+        assert isinstance(ti["enrichments"], list)
+
+    def test_has_stats(self):
+        resp = self._upload()
+        ti = resp.json()["forensics"]["threat_intelligence"]
+        assert "stats" in ti
+        assert isinstance(ti["stats"], dict)
+
+    def test_provider_is_noop(self):
+        resp = self._upload()
+        ti = resp.json()["forensics"]["threat_intelligence"]
+        assert ti["provider"] == "noop"
+
+    def test_enrichments_have_required_fields(self):
+        resp = self._upload()
+        ti = resp.json()["forensics"]["threat_intelligence"]
+        for e in ti["enrichments"]:
+            assert "ioc_type" in e
+            assert "ioc_value" in e
+            assert "verdict" in e
+            assert "provider" in e
+
+    def test_all_verdicts_are_not_enriched(self):
+        """NoOpProvider must never claim anything is malicious."""
+        resp = self._upload()
+        ti = resp.json()["forensics"]["threat_intelligence"]
+        for e in ti["enrichments"]:
+            assert e["verdict"] == "not_enriched"
+
+    def test_stats_reflect_not_enriched(self):
+        resp = self._upload()
+        ti = resp.json()["forensics"]["threat_intelligence"]
+        if ti["enrichments"]:
+            assert ti["stats"].get("not_enriched", 0) == len(ti["enrichments"])
+
+    def test_existing_forensic_fields_preserved(self):
+        resp = self._upload()
+        forensics = resp.json()["forensics"]
+        assert "received_hops" in forensics
+        assert "authentication" in forensics
+        assert "identity" in forensics
+        assert "flags" in forensics
+        assert "threat_score" in forensics
+        assert "ioc_extraction" in forensics
+
+    def test_threat_score_unchanged(self):
+        """Threat intelligence must NOT affect threat score."""
+        resp = self._upload()
+        ts = resp.json()["forensics"]["threat_score"]
+        assert ts["score"] == 10
+        assert ts["risk_level"] == "low"
+
+
+# ---------------------------------------------------------------------------
+# Tests: sample.eml threat intelligence enrichment content
+# ---------------------------------------------------------------------------
+
+class TestSampleEmlThreatIntel:
+    """Verify specific enrichments from sample.eml IOCs."""
+
+    def _upload(self):
+        with open(SAMPLE_EML, "rb") as f:
+            return client.post(
+                "/api/emails/upload",
+                files={"file": ("sample.eml", f, "message/rfc822")},
+                data={"email_account_id": "1"},
+            )
+
+    def _get_ti(self):
+        resp = self._upload()
+        return resp.json()["forensics"]["threat_intelligence"]
+
+    def test_ipv4_enrichments_present(self):
+        ti = self._get_ti()
+        ipv4_enrichments = [e for e in ti["enrichments"]
+                            if e["ioc_type"] == "ipv4"]
+        # sample.eml has 2 unique IPv4s: 198.51.100.42 and 203.0.113.17
+        assert len(ipv4_enrichments) >= 2
+
+    def test_domain_enrichments_present(self):
+        ti = self._get_ti()
+        domain_enrichments = [e for e in ti["enrichments"]
+                              if e["ioc_type"] == "domain"]
+        assert len(domain_enrichments) >= 1
+
+    def test_email_iocs_not_enriched(self):
+        """Email IOCs should be skipped by enrichment."""
+        ti = self._get_ti()
+        email_enrichments = [e for e in ti["enrichments"]
+                             if e["ioc_type"] == "email"]
+        assert len(email_enrichments) == 0
+
+    def test_enrichment_values_match_iocs(self):
+        """Enriched ioc_values should correspond to extracted IOCs."""
+        resp = self._upload()
+        forensics = resp.json()["forensics"]
+        ioc_values = {i["value"].lower()
+                      for i in forensics["ioc_extraction"]["iocs"]
+                      if i["ioc_type"] in ("ipv4", "ipv6", "domain", "url")}
+        ti_values = {e["ioc_value"].lower()
+                     for e in forensics["threat_intelligence"]["enrichments"]}
+        # Every enriched value must come from extracted IOCs
+        assert ti_values.issubset(ioc_values)
+
+    def test_enrichment_count_matches_unique_enrichable_iocs(self):
+        """Enrichment count should equal deduplicated enrichable IOC count."""
+        resp = self._upload()
+        forensics = resp.json()["forensics"]
+        # Build deduplicated enrichable set from IOC extraction
+        enrichable = set()
+        for i in forensics["ioc_extraction"]["iocs"]:
+            if i["ioc_type"] in ("ipv4", "ipv6", "domain", "url"):
+                enrichable.add((i["ioc_type"], i["value"].lower()))
+        ti_count = len(forensics["threat_intelligence"]["enrichments"])
+        assert ti_count == len(enrichable)
+
+    def test_no_confidence_from_noop(self):
+        ti = self._get_ti()
+        for e in ti["enrichments"]:
+            assert e["confidence"] is None
+
+    def test_no_geo_from_noop(self):
+        ti = self._get_ti()
+        for e in ti["enrichments"]:
+            assert e["country"] is None
+            assert e["country_code"] is None
+
+    def test_no_asn_from_noop(self):
+        ti = self._get_ti()
+        for e in ti["enrichments"]:
+            assert e["asn"] is None
+            assert e["organization"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: Threat intelligence persistence
+# ---------------------------------------------------------------------------
+
+class TestThreatIntelPersistence:
+    """Verify threat intelligence data is persisted in the database."""
+
+    def _upload(self):
+        with open(SAMPLE_EML, "rb") as f:
+            return client.post(
+                "/api/emails/upload",
+                files={"file": ("sample.eml", f, "message/rfc822")},
+                data={"email_account_id": "1"},
+            )
+
+    def test_persisted_json_contains_threat_intelligence(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        assert "threat_intelligence" in fa.analysis
+        db.close()
+
+    def test_persisted_has_enrichments(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        ti = fa.analysis["threat_intelligence"]
+        assert isinstance(ti["enrichments"], list)
+        assert len(ti["enrichments"]) > 0
+        db.close()
+
+    def test_persisted_has_provider(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        assert fa.analysis["threat_intelligence"]["provider"] == "noop"
+        db.close()
+
+    def test_persisted_matches_response(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        response_ti = resp.json()["forensics"]["threat_intelligence"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        persisted_ti = fa.analysis["threat_intelligence"]
+        assert len(persisted_ti["enrichments"]) == len(response_ti["enrichments"])
+        assert persisted_ti["provider"] == response_ti["provider"]
+        db.close()
+
+    def test_persisted_json_has_all_keys(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        assert "received_hops" in fa.analysis
+        assert "authentication" in fa.analysis
+        assert "identity" in fa.analysis
+        assert "flags" in fa.analysis
+        assert "threat_score" in fa.analysis
+        assert "ioc_extraction" in fa.analysis
+        assert "threat_intelligence" in fa.analysis
+        db.close()

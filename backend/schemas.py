@@ -91,6 +91,30 @@ class IOCExtractionResultSchema(BaseModel):
     stats: dict = {}
 
 
+class EnrichmentResultSchema(BaseModel):
+    """Threat-intelligence enrichment for a single IOC."""
+
+    ioc_type: str
+    ioc_value: str
+    verdict: str = "not_enriched"
+    confidence: Optional[float] = None
+    country: Optional[str] = None
+    country_code: Optional[str] = None
+    asn: Optional[str] = None
+    organization: Optional[str] = None
+    provider: str = ""
+    raw_data: Optional[dict] = None
+    error: Optional[str] = None
+
+
+class ThreatIntelResultSchema(BaseModel):
+    """Aggregated threat-intelligence enrichment results."""
+
+    enrichments: List[EnrichmentResultSchema] = []
+    stats: dict = {}
+    provider: str = ""
+
+
 class ForensicAnalysisSchema(BaseModel):
     """Complete forensic analysis result for one email."""
 
@@ -100,6 +124,7 @@ class ForensicAnalysisSchema(BaseModel):
     flags: List[ForensicFlagSchema] = []
     threat_score: Optional[ThreatScoreSchema] = None
     ioc_extraction: Optional[IOCExtractionResultSchema] = None
+    threat_intelligence: Optional[ThreatIntelResultSchema] = None
 
 
 # ---------------------------------------------------------------------------
