@@ -1,0 +1,45 @@
+import { NavLink } from 'react-router-dom';
+import { 
+  ShieldAlert, 
+  LayoutDashboard, 
+  Mail, 
+  Activity, 
+  Fingerprint,
+  FileText
+} from 'lucide-react';
+
+export default function Sidebar() {
+  const navItems = [
+    { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+    { path: '/emails', label: 'Emails', icon: Mail },
+    { path: '/threats', label: 'Threat Analysis', icon: Activity },
+    { path: '/iocs', label: 'IOCs', icon: Fingerprint },
+    { path: '/reports', label: 'Reports', icon: FileText },
+  ];
+
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-brand">
+        <ShieldAlert size={24} className="text-accent" color="#3b82f6" />
+        <span>MailForensics AI</span>
+      </div>
+      <nav className="sidebar-nav">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          return (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              className={({ isActive }) => 
+                `nav-item ${isActive ? 'active' : ''}`
+              }
+            >
+              <Icon size={20} />
+              <span>{item.label}</span>
+            </NavLink>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
