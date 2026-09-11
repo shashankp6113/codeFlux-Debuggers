@@ -277,11 +277,42 @@ class VirusTotalProvider(ThreatIntelProvider):
         # Strip the full response to the data envelope
         attrs = data.get("data", {}).get("attributes", {})
 
-        # Build raw_data WITHOUT the API key
-        raw_data = data
-        # Ensure no auth headers leak into raw_data
-        if "headers" in raw_data:
-            raw_data.pop("headers", None)
+        # Build compact raw_data — only useful forensic metadata.
+        # Deliberately exclude engine-by-engine last_analysis_results
+        # and any other bulk data to keep storage small.
+        compact: Dict[str, Any] = {}
+
+        # Analysis summary stats
+        las = attrs.get("last_analysis_stats")
+        if las and isinstance(las, dict):
+            compact["last_analysis_stats"] = {
+                k: las.get(k, 0)
+                for k in ("malicious", "suspicious", "harmless",
+                           "undetected", "timeout")
+            }
+
+        # Reputation score (integer, can be negative)
+        reputation = attrs.get("reputation")
+        if reputation is not None:
+            compact["reputation"] = reputation
+
+        # Geo / network metadata (available for IPs)
+        if attrs.get("country"):
+            compact["country"] = attrs["country"]
+        asn_raw = attrs.get("asn")
+        if asn_raw is not None:
+            compact["asn"] = asn_raw
+        if attrs.get("as_owner"):
+            compact["as_owner"] = attrs["as_owner"]
+
+        # VT object identity
+        vt_data = data.get("data", {})
+        if vt_data.get("type"):
+            compact["vt_type"] = vt_data["type"]
+        if vt_data.get("id"):
+            compact["vt_id"] = vt_data["id"]
+
+        raw_data = compact if compact else None
 
         # Extract geo / network metadata (available for IPs)
         country = attrs.get("country")

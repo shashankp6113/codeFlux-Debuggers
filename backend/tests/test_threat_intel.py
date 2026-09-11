@@ -1023,7 +1023,7 @@ class TestVirusTotalHTTPErrors:
 
 
 class TestVirusTotalRawData:
-    """raw_data and API key safety."""
+    """raw_data should contain compact forensic metadata only."""
 
     def test_raw_data_present(self, monkeypatch):
         p = _make_vt_provider(monkeypatch, api_key="secret-key-abc")
@@ -1041,13 +1041,89 @@ class TestVirusTotalRawData:
         raw_str = json.dumps(result.raw_data)
         assert "secret-key-abc" not in raw_str
 
-    def test_has_data_attributes(self, monkeypatch):
+    def test_has_last_analysis_stats(self, monkeypatch):
         p = _make_vt_provider(monkeypatch)
-        resp = _FakeResponse(200, _vt_response(malicious=10))
+        resp = _FakeResponse(200, _vt_response(malicious=10, suspicious=2,
+                                                harmless=50, undetected=8))
         monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
         result = p.enrich("ipv4", "1.2.3.4")
-        assert "data" in result.raw_data
-        assert "attributes" in result.raw_data["data"]
+        las = result.raw_data["last_analysis_stats"]
+        assert las["malicious"] == 10
+        assert las["suspicious"] == 2
+        assert las["harmless"] == 50
+        assert las["undetected"] == 8
+        assert "timeout" in las
+
+    def test_engine_by_engine_results_excluded(self, monkeypatch):
+        """The full last_analysis_results dict must NOT be stored."""
+        p = _make_vt_provider(monkeypatch)
+        vt_data = _vt_response(malicious=5, harmless=60)
+        # Inject a large engine-by-engine results dict
+        vt_data["data"]["attributes"]["last_analysis_results"] = {
+            "EngineA": {"category": "malicious", "result": "Phishing"},
+            "EngineB": {"category": "harmless", "result": "clean"},
+        }
+        resp = _FakeResponse(200, vt_data)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        import json
+        raw_str = json.dumps(result.raw_data)
+        assert "last_analysis_results" not in raw_str
+        assert "EngineA" not in raw_str
+        assert "EngineB" not in raw_str
+
+    def test_reputation_included(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        vt_data = _vt_response(harmless=70)
+        vt_data["data"]["attributes"]["reputation"] = -5
+        resp = _FakeResponse(200, vt_data)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "8.8.8.8")
+        assert result.raw_data["reputation"] == -5
+
+    def test_geo_in_compact(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(
+            harmless=70, country="US", asn=15169, as_owner="Google LLC",
+        ))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "8.8.8.8")
+        assert result.raw_data["country"] == "US"
+        assert result.raw_data["asn"] == 15169
+        assert result.raw_data["as_owner"] == "Google LLC"
+
+    def test_vt_object_type_and_id(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        vt_data = _vt_response(harmless=70)
+        vt_data["data"]["type"] = "ip_address"
+        vt_data["data"]["id"] = "8.8.8.8"
+        resp = _FakeResponse(200, vt_data)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "8.8.8.8")
+        assert result.raw_data["vt_type"] == "ip_address"
+        assert result.raw_data["vt_id"] == "8.8.8.8"
+
+    def test_missing_optional_fields_safe(self, monkeypatch):
+        """No crash when geo/reputation/type are absent."""
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(harmless=1))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("domain", "example.com")
+        assert result.raw_data is not None
+        assert "last_analysis_stats" in result.raw_data
+        # These should simply be absent, not error
+        assert "country" not in result.raw_data
+        assert "reputation" not in result.raw_data
+
+    def test_verdict_unchanged_after_compaction(self, monkeypatch):
+        """Compact raw_data must not affect verdict/confidence."""
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(malicious=10, harmless=50))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.verdict == "malicious"
+        assert result.confidence is not None
+        assert result.confidence == round(10 / 60, 2)
 
 
 class TestVirusTotalGeoASN:
