@@ -55,6 +55,7 @@ RULE_WEIGHTS: Dict[str, int] = {
     "DKIM_FAIL": 15,
     "DMARC_FAIL": 20,
     "SPF_SOFTFAIL": 8,
+    "SPF_VERDICT_CONFLICT": 5,
 }
 
 # Multiplier applied on top of the base weight depending on severity.
@@ -75,6 +76,7 @@ RULE_CATEGORIES: Dict[str, str] = {
     "DKIM_FAIL": "authentication",
     "DMARC_FAIL": "authentication",
     "SPF_SOFTFAIL": "authentication",
+    "SPF_VERDICT_CONFLICT": "authentication",
 }
 
 # Maximum contribution any single category may make to the total score.

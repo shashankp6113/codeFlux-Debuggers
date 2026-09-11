@@ -892,3 +892,64 @@ class TestExistingScoringUnchanged:
         result = calculate_threat_score(analysis)
         assert result.score == 10
 
+
+# ---------------------------------------------------------------------------
+# 18. SPF verdict conflict scoring
+# ---------------------------------------------------------------------------
+
+class TestSPFConflictScoring:
+    """SPF_VERDICT_CONFLICT scoring behavior."""
+
+    def test_weight(self):
+        assert RULE_WEIGHTS["SPF_VERDICT_CONFLICT"] == 5
+
+    def test_category(self):
+        assert RULE_CATEGORIES["SPF_VERDICT_CONFLICT"] == "authentication"
+
+    def test_contribution(self):
+        """SPF_VERDICT_CONFLICT (warning) → 5 × 1.5 = 7."""
+        analysis = _make_analysis(_flag("SPF_VERDICT_CONFLICT", "warning"))
+        result = calculate_threat_score(analysis)
+        contribs = {c["rule_id"]: c["points"] for c in result.rule_contributions}
+        assert contribs["SPF_VERDICT_CONFLICT"] == 7  # int(5 * 1.5)
+
+    def test_alone_under_cap(self):
+        """Conflict alone → 7, well under auth cap of 25."""
+        analysis = _make_analysis(_flag("SPF_VERDICT_CONFLICT", "warning"))
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 7
+        assert result.score == 7
+
+    def test_with_spf_fail(self):
+        """Conflict(7) + SPF_FAIL(22) = 29, capped at 25."""
+        analysis = _make_analysis(
+            _flag("SPF_VERDICT_CONFLICT", "warning"),
+            _flag("SPF_FAIL", "warning"),
+        )
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 25
+
+    def test_with_dkim_dmarc_fail(self):
+        """Conflict + DKIM + DMARC all capped at 25."""
+        analysis = _make_analysis(
+            _flag("SPF_VERDICT_CONFLICT", "warning"),
+            _flag("DKIM_FAIL", "warning"),
+            _flag("DMARC_FAIL", "warning"),
+        )
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 25
+
+    def test_auth_cap_unchanged(self):
+        assert CATEGORY_CAPS["authentication"] == 25
+
+    def test_with_identity_combined(self):
+        """Auth(7) + identity(22) → total 29."""
+        analysis = _make_analysis(
+            _flag("SPF_VERDICT_CONFLICT", "warning"),
+            _flag("REPLY_TO_DOMAIN_MISMATCH", "warning"),
+        )
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 7
+        assert result.category_scores["identity"] == 22
+        assert result.score == 29
+

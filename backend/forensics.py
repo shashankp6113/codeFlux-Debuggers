@@ -535,6 +535,32 @@ def _detect_inconsistencies(
             ),
         ))
 
+    # RULE 10: SPF verdict conflict between Authentication-Results and
+    # Received-SPF headers
+    _MEANINGFUL_SPF = {"pass", "fail", "softfail"}
+    ar_spf = _MEANINGFUL_SPF & set(authentication.all_spf_verdicts)
+    rs_spf = _MEANINGFUL_SPF & set(authentication.all_received_spf_verdicts)
+    if ar_spf and rs_spf and ar_spf != rs_spf:
+        flags.append(ForensicFlag(
+            rule_id="SPF_VERDICT_CONFLICT",
+            severity="warning",
+            description=(
+                "The SPF verdicts reported in Authentication-Results "
+                "and Received-SPF headers disagree. This conflict "
+                "between reported authentication results should be "
+                "investigated, as it may indicate header injection, "
+                "misconfigured mail servers, or multiple evaluations "
+                "with different outcomes. Neither result has been "
+                "independently verified."
+            ),
+            evidence=(
+                f"Authentication-Results SPF verdicts: "
+                f"{authentication.all_spf_verdicts}, "
+                f"Received-SPF verdicts: "
+                f"{authentication.all_received_spf_verdicts}"
+            ),
+        ))
+
     return flags
 
 

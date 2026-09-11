@@ -2322,3 +2322,264 @@ Subject: Dup tags"""
         entry = _build_dkim_entry("s=first; s=second; d=example.com")
         assert entry.selector == "first"
 
+
+# ---------------------------------------------------------------------------
+# SPF verdict conflict detection test fixtures
+# ---------------------------------------------------------------------------
+
+HEADERS_SPF_CONFLICT_PASS_FAIL = """\
+Authentication-Results: mx.test; spf=pass
+Received-SPF: fail (mx.test: not authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-001@example.test>
+Subject: Pass vs Fail"""
+
+HEADERS_SPF_CONFLICT_FAIL_PASS = """\
+Authentication-Results: mx.test; spf=fail
+Received-SPF: pass (mx.test: authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-002@example.test>
+Subject: Fail vs Pass"""
+
+HEADERS_SPF_CONFLICT_PASS_SOFTFAIL = """\
+Authentication-Results: mx.test; spf=pass
+Received-SPF: softfail (mx.test: transitioning)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-003@example.test>
+Subject: Pass vs Softfail"""
+
+HEADERS_SPF_CONFLICT_SOFTFAIL_FAIL = """\
+Authentication-Results: mx.test; spf=softfail
+Received-SPF: fail (mx.test: not authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-004@example.test>
+Subject: Softfail vs Fail"""
+
+HEADERS_SPF_SAME_PASS = """\
+Authentication-Results: mx.test; spf=pass
+Received-SPF: pass (mx.test: authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-005@example.test>
+Subject: Same pass"""
+
+HEADERS_SPF_SAME_FAIL = """\
+Authentication-Results: mx.test; spf=fail
+Received-SPF: fail (mx.test: not authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-006@example.test>
+Subject: Same fail"""
+
+HEADERS_SPF_ONLY_AR = """\
+Authentication-Results: mx.test; spf=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-007@example.test>
+Subject: Only AR"""
+
+HEADERS_SPF_ONLY_RS = """\
+Received-SPF: pass (mx.test: authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-008@example.test>
+Subject: Only RS"""
+
+HEADERS_SPF_NEUTRAL_VS_PASS = """\
+Authentication-Results: mx.test; spf=neutral
+Received-SPF: pass (mx.test: authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-009@example.test>
+Subject: Neutral vs Pass"""
+
+HEADERS_SPF_NONE_VS_FAIL = """\
+Authentication-Results: mx.test; spf=none
+Received-SPF: fail (mx.test: not authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-010@example.test>
+Subject: None vs Fail"""
+
+HEADERS_SPF_TEMPERROR_VS_PASS = """\
+Authentication-Results: mx.test; spf=temperror
+Received-SPF: pass (mx.test: authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-011@example.test>
+Subject: Temperror vs Pass"""
+
+HEADERS_SPF_PERMERROR_VS_FAIL = """\
+Authentication-Results: mx.test; spf=permerror
+Received-SPF: fail (mx.test: not authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-012@example.test>
+Subject: Permerror vs Fail"""
+
+HEADERS_SPF_MULTI_CONFLICT = """\
+Authentication-Results: mx1.test; spf=pass
+Authentication-Results: mx2.test; spf=pass
+Received-SPF: fail (mx.test: not authorized)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-013@example.test>
+Subject: Multi header conflict"""
+
+HEADERS_SPF_MULTI_MIXED = """\
+Authentication-Results: mx1.test; spf=pass
+Authentication-Results: mx2.test; spf=fail
+Received-SPF: softfail (mx.test: transitioning)
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <conflict-014@example.test>
+Subject: Multi mixed verdicts"""
+
+
+# ---------------------------------------------------------------------------
+# Tests: SPF verdict conflict detection
+# ---------------------------------------------------------------------------
+
+class TestSPFVerdictConflict:
+    """Core conflict detection: triggers and does not trigger."""
+
+    def _rule_ids(self, headers):
+        return [f.rule_id for f in analyze_headers(headers).flags]
+
+    # --- Meaningful disagreements → conflict ---
+
+    def test_pass_vs_fail(self):
+        assert "SPF_VERDICT_CONFLICT" in self._rule_ids(HEADERS_SPF_CONFLICT_PASS_FAIL)
+
+    def test_fail_vs_pass(self):
+        assert "SPF_VERDICT_CONFLICT" in self._rule_ids(HEADERS_SPF_CONFLICT_FAIL_PASS)
+
+    def test_pass_vs_softfail(self):
+        assert "SPF_VERDICT_CONFLICT" in self._rule_ids(HEADERS_SPF_CONFLICT_PASS_SOFTFAIL)
+
+    def test_softfail_vs_fail(self):
+        assert "SPF_VERDICT_CONFLICT" in self._rule_ids(HEADERS_SPF_CONFLICT_SOFTFAIL_FAIL)
+
+    # --- Same verdict → no conflict ---
+
+    def test_same_pass_no_conflict(self):
+        assert "SPF_VERDICT_CONFLICT" not in self._rule_ids(HEADERS_SPF_SAME_PASS)
+
+    def test_same_fail_no_conflict(self):
+        assert "SPF_VERDICT_CONFLICT" not in self._rule_ids(HEADERS_SPF_SAME_FAIL)
+
+    # --- Single source → no conflict ---
+
+    def test_only_ar_no_conflict(self):
+        assert "SPF_VERDICT_CONFLICT" not in self._rule_ids(HEADERS_SPF_ONLY_AR)
+
+    def test_only_rs_no_conflict(self):
+        assert "SPF_VERDICT_CONFLICT" not in self._rule_ids(HEADERS_SPF_ONLY_RS)
+
+    # --- Non-meaningful verdicts → no conflict ---
+
+    def test_neutral_vs_pass_no_conflict(self):
+        """neutral is not a meaningful SPF verdict for conflict detection."""
+        assert "SPF_VERDICT_CONFLICT" not in self._rule_ids(HEADERS_SPF_NEUTRAL_VS_PASS)
+
+    def test_none_vs_fail_no_conflict(self):
+        assert "SPF_VERDICT_CONFLICT" not in self._rule_ids(HEADERS_SPF_NONE_VS_FAIL)
+
+    def test_temperror_vs_pass_no_conflict(self):
+        assert "SPF_VERDICT_CONFLICT" not in self._rule_ids(HEADERS_SPF_TEMPERROR_VS_PASS)
+
+    def test_permerror_vs_fail_no_conflict(self):
+        assert "SPF_VERDICT_CONFLICT" not in self._rule_ids(HEADERS_SPF_PERMERROR_VS_FAIL)
+
+    # --- Empty / no auth → no conflict ---
+
+    def test_no_auth_no_conflict(self):
+        assert "SPF_VERDICT_CONFLICT" not in self._rule_ids(HEADERS_NO_AUTH)
+
+    def test_empty_no_conflict(self):
+        assert "SPF_VERDICT_CONFLICT" not in self._rule_ids(HEADERS_EMPTY)
+
+    # --- Severity ---
+
+    def test_severity_is_warning(self):
+        flags = analyze_headers(HEADERS_SPF_CONFLICT_PASS_FAIL).flags
+        conflict = [f for f in flags if f.rule_id == "SPF_VERDICT_CONFLICT"][0]
+        assert conflict.severity == "warning"
+
+
+class TestSPFVerdictConflictMultiHeader:
+    """Multi-header scenarios: deduplication and cross-header detection."""
+
+    def _rule_ids(self, headers):
+        return [f.rule_id for f in analyze_headers(headers).flags]
+
+    def test_multi_header_one_flag(self):
+        """Multiple AR pass + RS fail → exactly one conflict flag."""
+        ids = self._rule_ids(HEADERS_SPF_MULTI_CONFLICT)
+        assert ids.count("SPF_VERDICT_CONFLICT") == 1
+
+    def test_multi_mixed_has_conflict(self):
+        """AR has pass+fail, RS has softfail → conflict (sets differ)."""
+        assert "SPF_VERDICT_CONFLICT" in self._rule_ids(HEADERS_SPF_MULTI_MIXED)
+
+    def test_multi_mixed_one_flag(self):
+        ids = self._rule_ids(HEADERS_SPF_MULTI_MIXED)
+        assert ids.count("SPF_VERDICT_CONFLICT") == 1
+
+
+class TestSPFVerdictConflictWording:
+    """Verify description uses correct forensic wording."""
+
+    def test_says_reported(self):
+        flags = analyze_headers(HEADERS_SPF_CONFLICT_PASS_FAIL).flags
+        conflict = [f for f in flags if f.rule_id == "SPF_VERDICT_CONFLICT"][0]
+        assert "reported" in conflict.description.lower()
+
+    def test_says_investigated(self):
+        flags = analyze_headers(HEADERS_SPF_CONFLICT_PASS_FAIL).flags
+        conflict = [f for f in flags if f.rule_id == "SPF_VERDICT_CONFLICT"][0]
+        assert "investigated" in conflict.description.lower()
+
+    def test_says_not_verified(self):
+        flags = analyze_headers(HEADERS_SPF_CONFLICT_PASS_FAIL).flags
+        conflict = [f for f in flags if f.rule_id == "SPF_VERDICT_CONFLICT"][0]
+        desc = conflict.description.lower()
+        assert "independently verified" in desc
+        assert "neither" in desc
+
+    def test_evidence_lists_verdicts(self):
+        flags = analyze_headers(HEADERS_SPF_CONFLICT_PASS_FAIL).flags
+        conflict = [f for f in flags if f.rule_id == "SPF_VERDICT_CONFLICT"][0]
+        assert "pass" in conflict.evidence.lower()
+        assert "fail" in conflict.evidence.lower()
+
+
+class TestSPFConflictCoexistence:
+    """Conflict flag coexists with SPF_FAIL when both conditions are met."""
+
+    def _rule_ids(self, headers):
+        return [f.rule_id for f in analyze_headers(headers).flags]
+
+    def test_conflict_and_spf_fail_both_present(self):
+        """RS says fail → SPF_FAIL fires. AR says pass → conflict fires."""
+        ids = self._rule_ids(HEADERS_SPF_CONFLICT_PASS_FAIL)
+        assert "SPF_FAIL" in ids
+        assert "SPF_VERDICT_CONFLICT" in ids
+
+    def test_conflict_and_spf_fail_reverse(self):
+        """AR says fail → SPF_FAIL fires. RS says pass → conflict fires."""
+        ids = self._rule_ids(HEADERS_SPF_CONFLICT_FAIL_PASS)
+        assert "SPF_FAIL" in ids
+        assert "SPF_VERDICT_CONFLICT" in ids
+
+    def test_conflict_and_softfail_both(self):
+        """AR says softfail → SPF_SOFTFAIL fires. RS says fail → conflict."""
+        ids = self._rule_ids(HEADERS_SPF_CONFLICT_SOFTFAIL_FAIL)
+        assert "SPF_SOFTFAIL" in ids
+        assert "SPF_FAIL" in ids
+        assert "SPF_VERDICT_CONFLICT" in ids
+
