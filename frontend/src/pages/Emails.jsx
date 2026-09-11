@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Inbox, AlertTriangle, Loader } from 'lucide-react';
 import { api } from '../lib/api';
+import UploadButton from '../components/UploadButton';
 
 export default function Emails() {
   const navigate = useNavigate();
@@ -85,7 +86,8 @@ export default function Emails() {
               <>
                 <Inbox size={48} className="empty-state-icon" />
                 <h3>No emails processed</h3>
-                <p>Upload or connect an inbox to start analyzing emails.</p>
+                <p style={{ marginBottom: '1rem' }}>Upload or connect an inbox to start analyzing emails.</p>
+                <UploadButton label="Upload .eml File" />
               </>
             ) : (
               <>

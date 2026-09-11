@@ -1,6 +1,6 @@
 from dataclasses import asdict
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import FastAPI, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import RedirectResponse
@@ -262,13 +262,13 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
 @app.post("/api/emails/upload", response_model=EmailResponse)
 async def upload_email(
     file: UploadFile=File(...),
-    email_account_id: int=Form(
-        ...,
+    email_account_id: Optional[int]=Form(
+        None,
         description=(
             "DEV-ONLY: The EmailAccount ID to associate this email with. "
             "In production this will be derived from the authenticated user. "
             "For development testing, create an EmailAccount row first and "
-            "supply its ID here."
+            "supply its ID here. If omitted, a fallback development account will be used."
         ),
     ),
     db: Session=Depends(get_db),
@@ -277,10 +277,39 @@ async def upload_email(
 
     Accepts a multipart/form-data request with:
     - **file**: the .eml file (required)
-    - **email_account_id**: the EmailAccount to associate with (required, dev-only)
+    - **email_account_id**: the EmailAccount to associate with (optional, dev-only)
 
     Returns the parsed and stored email record with forensic analysis.
     """
+    if email_account_id is None:
+        # Development fallback logic
+        dev_user = db.query(User).filter_by(email="dev@mailforensics.local").first()
+        if not dev_user:
+            dev_user = User(email="dev@mailforensics.local", name="Development User")
+            db.add(dev_user)
+            db.commit()
+            db.refresh(dev_user)
+
+        dev_account = db.query(EmailAccount).filter_by(
+            user_id=dev_user.id, provider="manual_upload"
+        ).first()
+        if not dev_account:
+            dev_account = EmailAccount(
+                user_id=dev_user.id,
+                provider="manual_upload",
+                email_address="upload@mailforensics.local"
+            )
+            db.add(dev_account)
+            db.commit()
+            db.refresh(dev_account)
+        email_account_id = dev_account.id
+    else:
+        # Preserve existing validation (if any tests expect failures for bad explicit IDs,
+        # but previously there was none. We can verify it exists if we want to be safe).
+        account = db.query(EmailAccount).filter_by(id=email_account_id).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="EmailAccount not found")
+
     # Validate filename
     if not file.filename or not file.filename.lower().endswith(".eml"):
         raise HTTPException(

@@ -1441,3 +1441,36 @@ def test_upload_with_ai_failure():
     assert ai["classification"] == "unknown"
     assert "429" in ai["error"]
     assert data["forensics"]["threat_score"]["score"] is not None # Deterministic pipeline survived
+
+def test_upload_missing_email_account_id():
+    """Test that omitting email_account_id uses the development fallback."""
+    sample_path = os.path.join(FIXTURES_DIR, "sample.eml")
+    with open(sample_path, "rb") as f:
+        response = client.post(
+            "/api/emails/upload",
+            files={"file": ("sample.eml", f, "message/rfc822")},
+            # No data={"email_account_id": ...}
+        )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["email_account_id"] is not None
+
+    # Verify fallback account was created
+    db = TestSession()
+    account = db.query(EmailAccount).filter_by(id=data["email_account_id"]).first()
+    assert account is not None
+    assert account.provider == "manual_upload"
+    assert account.email_address == "upload@mailforensics.local"
+    db.close()
+
+def test_upload_invalid_email_account_id():
+    """Test that providing an explicit but nonexistent email_account_id fails."""
+    sample_path = os.path.join(FIXTURES_DIR, "sample.eml")
+    with open(sample_path, "rb") as f:
+        response = client.post(
+            "/api/emails/upload",
+            files={"file": ("sample.eml", f, "message/rfc822")},
+            data={"email_account_id": "99999"},
+        )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "EmailAccount not found"

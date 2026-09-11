@@ -138,6 +138,11 @@ a {
   flex: 1;
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Common Components */
 .page-title {
   font-size: 1.75rem;

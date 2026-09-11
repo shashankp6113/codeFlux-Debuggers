@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { 
   Mail, ShieldAlert, AlertTriangle, Bug, 
-  Plus, Search, Inbox, PieChart, Activity, Loader
+  Search, Inbox, PieChart, Activity, Loader
 } from 'lucide-react';
 import { api } from '../lib/api';
+import UploadButton from '../components/UploadButton';
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
@@ -63,10 +64,7 @@ export default function Dashboard() {
     <div>
       <div className="dashboard-header">
         <h1 className="page-title">Security Overview</h1>
-        <button className="btn-primary">
-          <Plus size={18} />
-          New Analysis
-        </button>
+        <UploadButton label="New Analysis" />
       </div>
 
       <div className="metrics-grid">
@@ -148,7 +146,7 @@ export default function Dashboard() {
               <Inbox size={48} className="empty-state-icon" />
               <h3>No recent investigations</h3>
               <p>Connect an email account or upload an .eml file to start analyzing.</p>
-              <button className="btn-primary">Import Email</button>
+              <UploadButton label="Import Email" icon={null} />
             </div>
           )}
         </div>
