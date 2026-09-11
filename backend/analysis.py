@@ -1,14 +1,15 @@
 """Unified email analysis orchestration for MailForensics AI.
 
 Provides a single ``run_email_analysis`` function that executes the
-full deterministic analysis pipeline on a parsed email:
+full analysis pipeline on a parsed email:
 
 1. Header forensics (when raw headers exist)
 2. Threat scoring (when header forensics ran)
 3. IOC extraction (always)
 4. Threat-intelligence enrichment (always)
 5. IP geolocation (always)
-6. ForensicAnalysis persistence (always)
+6. AI analysis (always — NoOp when Gemini is not configured)
+7. ForensicAnalysis persistence (always)
 
 Both the ``.eml`` upload endpoint and Gmail synchronisation call this
 function so the pipeline logic is never duplicated.
@@ -25,6 +26,7 @@ from scoring import calculate_threat_score
 from ioc_extractor import extract_iocs
 from threat_intel import enrich_iocs, get_provider
 from geolocation import geolocate_ips, get_geolocation_provider
+from ai_analysis import build_ai_evidence, get_ai_provider, AIAnalysisResult
 from models import ForensicAnalysis as ForensicAnalysisRecord
 
 
@@ -68,7 +70,42 @@ def run_email_analysis(
     geo_result = geolocate_ips(ioc_result, provider=geo_provider)
     analysis_dict["geolocation"] = asdict(geo_result)
 
-    # 6. Persist ForensicAnalysis
+    # 6. AI analysis (always — NoOp when Gemini is not configured)
+    #
+    # Build structured evidence from the complete deterministic analysis
+    # and safe email metadata.  The evidence builder scrubs sensitive
+    # fields (tokens, passwords, raw body, etc.).
+    email_metadata = {
+        "subject": parsed.subject,
+        "sender": parsed.sender,
+        "recipient": parsed.recipient,
+        "message_id": parsed.message_id,
+    }
+    evidence = build_ai_evidence(analysis_dict, email_metadata=email_metadata)
+
+    try:
+        ai_provider = get_ai_provider()
+        ai_result = ai_provider.analyze(evidence)
+    except Exception:
+        # Defence-in-depth: if the AI provider crashes unexpectedly,
+        # never let it break the deterministic pipeline.
+        ai_result = AIAnalysisResult(
+            classification="unknown",
+            provider="error",
+            error="AI provider raised an unexpected exception",
+        )
+
+    analysis_dict["ai_analysis"] = {
+        "classification": ai_result.classification,
+        "confidence": ai_result.confidence,
+        "summary": ai_result.summary,
+        "explanation": ai_result.explanation,
+        "recommended_actions": ai_result.recommended_actions,
+        "provider": ai_result.provider,
+        "error": ai_result.error,
+    }
+
+    # 7. Persist ForensicAnalysis
     db_forensic = ForensicAnalysisRecord(
         email_id=db_email.id,
         analysis=analysis_dict,
