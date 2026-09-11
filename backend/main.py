@@ -250,3 +250,70 @@ async def upload_email(
     response.forensics = forensics_result
 
     return response
+
+
+# ---------------------------------------------------------------------------
+# Gmail message retrieval endpoint
+# ---------------------------------------------------------------------------
+
+from gmail_client import sync_gmail_messages, GmailAPIError  # noqa: E402
+
+@app.get("/api/gmail/{email_account_id}/messages")
+def gmail_fetch_messages(
+    email_account_id: int,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+):
+    """Retrieve Gmail messages for an authorized EmailAccount.
+
+    Fetches up to *limit* messages from the Gmail API, converts them
+    through the existing email parser, and persists them as Email rows.
+
+    Does NOT run forensic analysis — that will be connected later.
+
+    Args:
+        email_account_id: The EmailAccount to fetch messages for.
+        limit:            Maximum messages to fetch (default 10, max 50).
+    """
+    # Verify account exists
+    account = db.query(EmailAccount).filter_by(id=email_account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="EmailAccount not found")
+
+    # Verify it's a Gmail account
+    if account.provider != "gmail":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Account {email_account_id} is not a Gmail account "
+                   f"(provider: {account.provider})",
+        )
+
+    # Verify we have an access token
+    if not account.access_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Gmail account has no access token — re-authorize first",
+        )
+
+    # Sync messages
+    try:
+        result = sync_gmail_messages(
+            account_id=account.id,
+            access_token=account.access_token,
+            db_session=db,
+            limit=limit,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gmail sync failed: {exc}",
+        )
+
+    return {
+        "message": "Gmail messages synced",
+        "email_account_id": account.id,
+        "fetched": result.fetched,
+        "persisted": result.persisted,
+        "skipped_duplicate": result.skipped_duplicate,
+        "errors": result.errors,
+    }
