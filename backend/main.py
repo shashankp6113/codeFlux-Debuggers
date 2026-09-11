@@ -8,6 +8,7 @@ from models import Email, ForensicAnalysis as ForensicAnalysisRecord
 from schemas import EmailResponse, ForensicAnalysisSchema
 from email_parser import parse_eml
 from forensics import analyze_headers
+from scoring import calculate_threat_score
 
 app=FastAPI()
 
@@ -86,7 +87,11 @@ async def upload_email(
         analysis = analyze_headers(parsed.raw_headers)
         analysis_dict = asdict(analysis)
 
-        # Persist forensic analysis to database
+        # Compute deterministic threat score from forensic flags
+        threat_score = calculate_threat_score(analysis)
+        analysis_dict["threat_score"] = asdict(threat_score)
+
+        # Persist forensic analysis (including threat_score) to database
         db_forensic = ForensicAnalysisRecord(
             email_id=db_email.id,
             analysis=analysis_dict,

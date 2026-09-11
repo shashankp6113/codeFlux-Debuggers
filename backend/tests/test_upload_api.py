@@ -299,3 +299,203 @@ class TestUploadPersistsForensic:
         rule_ids = [f["rule_id"] for f in fa.analysis["flags"]]
         assert "MISSING_AUTH_HEADERS" in rule_ids
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Threat score in upload response
+# ---------------------------------------------------------------------------
+
+class TestUploadThreatScore:
+    """Verify that uploading sample.eml returns threat_score in forensics."""
+
+    def _upload(self):
+        with open(SAMPLE_EML, "rb") as f:
+            return client.post(
+                "/api/emails/upload",
+                files={"file": ("sample.eml", f, "message/rfc822")},
+                data={"email_account_id": "1"},
+            )
+
+    def test_threat_score_present_in_response(self):
+        forensics = self._upload().json()["forensics"]
+        assert "threat_score" in forensics
+        assert forensics["threat_score"] is not None
+
+    def test_score_is_integer(self):
+        ts = self._upload().json()["forensics"]["threat_score"]
+        assert isinstance(ts["score"], int)
+
+    def test_score_in_range(self):
+        ts = self._upload().json()["forensics"]["threat_score"]
+        assert 0 <= ts["score"] <= 100
+
+    def test_risk_level_present(self):
+        ts = self._upload().json()["forensics"]["threat_score"]
+        assert "risk_level" in ts
+        assert ts["risk_level"] in ("low", "medium", "high", "critical")
+
+    def test_category_scores_present(self):
+        ts = self._upload().json()["forensics"]["threat_score"]
+        assert "category_scores" in ts
+        assert isinstance(ts["category_scores"], dict)
+
+    def test_rule_contributions_present(self):
+        ts = self._upload().json()["forensics"]["threat_score"]
+        assert "rule_contributions" in ts
+        assert isinstance(ts["rule_contributions"], list)
+
+    def test_rule_contribution_fields(self):
+        ts = self._upload().json()["forensics"]["threat_score"]
+        for contrib in ts["rule_contributions"]:
+            assert "rule_id" in contrib
+            assert "category" in contrib
+            assert "severity" in contrib
+            assert "points" in contrib
+
+    def test_existing_forensic_fields_preserved(self):
+        """Existing forensic fields must still be present alongside threat_score."""
+        forensics = self._upload().json()["forensics"]
+        assert "received_hops" in forensics
+        assert "authentication" in forensics
+        assert "identity" in forensics
+        assert "flags" in forensics
+        assert "threat_score" in forensics
+
+    def test_existing_email_fields_still_present(self):
+        """Top-level email fields must be unaffected by threat_score addition."""
+        data = self._upload().json()
+        assert "id" in data
+        assert "sender" in data
+        assert "recipient" in data
+        assert "subject" in data
+        assert "forensics" in data
+
+
+# ---------------------------------------------------------------------------
+# Tests: Deterministic threat score for sample.eml
+# ---------------------------------------------------------------------------
+
+class TestSampleEmlThreatScore:
+    """sample.eml has only MISSING_AUTH_HEADERS (info) → score=10, risk=low."""
+
+    def _upload(self):
+        with open(SAMPLE_EML, "rb") as f:
+            return client.post(
+                "/api/emails/upload",
+                files={"file": ("sample.eml", f, "message/rfc822")},
+                data={"email_account_id": "1"},
+            )
+
+    def test_deterministic_score(self):
+        """MISSING_AUTH_HEADERS (info): base 10 × 1.0 = 10."""
+        ts = self._upload().json()["forensics"]["threat_score"]
+        assert ts["score"] == 10
+
+    def test_deterministic_risk_level(self):
+        ts = self._upload().json()["forensics"]["threat_score"]
+        assert ts["risk_level"] == "low"
+
+    def test_authentication_category_score(self):
+        ts = self._upload().json()["forensics"]["threat_score"]
+        assert ts["category_scores"]["authentication"] == 10
+
+    def test_only_authentication_category(self):
+        """Only the authentication category should appear."""
+        ts = self._upload().json()["forensics"]["threat_score"]
+        assert list(ts["category_scores"].keys()) == ["authentication"]
+
+    def test_single_rule_contribution(self):
+        ts = self._upload().json()["forensics"]["threat_score"]
+        assert len(ts["rule_contributions"]) == 1
+        c = ts["rule_contributions"][0]
+        assert c["rule_id"] == "MISSING_AUTH_HEADERS"
+        assert c["category"] == "authentication"
+        assert c["severity"] == "info"
+        assert c["points"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Tests: Threat score persistence in database
+# ---------------------------------------------------------------------------
+
+class TestThreatScorePersistence:
+    """Verify threat_score is persisted inside forensic_analyses.analysis JSON."""
+
+    def _upload(self):
+        with open(SAMPLE_EML, "rb") as f:
+            return client.post(
+                "/api/emails/upload",
+                files={"file": ("sample.eml", f, "message/rfc822")},
+                data={"email_account_id": "1"},
+            )
+
+    def test_persisted_json_contains_threat_score(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        assert "threat_score" in fa.analysis
+        db.close()
+
+    def test_persisted_threat_score_has_score(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        ts = fa.analysis["threat_score"]
+        assert isinstance(ts["score"], int)
+        assert 0 <= ts["score"] <= 100
+        db.close()
+
+    def test_persisted_threat_score_has_risk_level(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        ts = fa.analysis["threat_score"]
+        assert ts["risk_level"] in ("low", "medium", "high", "critical")
+        db.close()
+
+    def test_persisted_threat_score_has_category_scores(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        ts = fa.analysis["threat_score"]
+        assert isinstance(ts["category_scores"], dict)
+        db.close()
+
+    def test_persisted_threat_score_has_rule_contributions(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        ts = fa.analysis["threat_score"]
+        assert isinstance(ts["rule_contributions"], list)
+        db.close()
+
+    def test_persisted_score_matches_response(self):
+        """The persisted threat_score must match what the API returned."""
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        api_ts = resp.json()["forensics"]["threat_score"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        db_ts = fa.analysis["threat_score"]
+        assert db_ts["score"] == api_ts["score"]
+        assert db_ts["risk_level"] == api_ts["risk_level"]
+        assert db_ts["category_scores"] == api_ts["category_scores"]
+        db.close()
+
+    def test_persisted_json_still_has_existing_keys(self):
+        """Adding threat_score must not remove existing keys from the JSON."""
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        assert "received_hops" in fa.analysis
+        assert "authentication" in fa.analysis
+        assert "identity" in fa.analysis
+        assert "flags" in fa.analysis
+        assert "threat_score" in fa.analysis
+        db.close()

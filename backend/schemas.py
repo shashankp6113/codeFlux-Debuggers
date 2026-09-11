@@ -57,6 +57,24 @@ class ForensicFlagSchema(BaseModel):
     evidence: str
 
 
+class RuleContributionSchema(BaseModel):
+    """A single rule's contribution to the threat score."""
+
+    rule_id: str
+    category: str
+    severity: str
+    points: int
+
+
+class ThreatScoreSchema(BaseModel):
+    """Deterministic threat score computed from forensic flags."""
+
+    score: int
+    risk_level: str
+    category_scores: dict = {}
+    rule_contributions: List[RuleContributionSchema] = []
+
+
 class ForensicAnalysisSchema(BaseModel):
     """Complete forensic analysis result for one email."""
 
@@ -64,6 +82,7 @@ class ForensicAnalysisSchema(BaseModel):
     authentication: AuthenticationHeadersSchema = AuthenticationHeadersSchema()
     identity: IdentityHeadersSchema = IdentityHeadersSchema()
     flags: List[ForensicFlagSchema] = []
+    threat_score: Optional[ThreatScoreSchema] = None
 
 
 # ---------------------------------------------------------------------------
