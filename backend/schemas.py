@@ -75,6 +75,22 @@ class ThreatScoreSchema(BaseModel):
     rule_contributions: List[RuleContributionSchema] = []
 
 
+class IOCSchema(BaseModel):
+    """A single Indicator of Compromise extracted from an email."""
+
+    ioc_type: str
+    value: str
+    source: str
+    context: str
+
+
+class IOCExtractionResultSchema(BaseModel):
+    """Complete IOC extraction result for one email."""
+
+    iocs: List[IOCSchema] = []
+    stats: dict = {}
+
+
 class ForensicAnalysisSchema(BaseModel):
     """Complete forensic analysis result for one email."""
 
@@ -83,6 +99,7 @@ class ForensicAnalysisSchema(BaseModel):
     identity: IdentityHeadersSchema = IdentityHeadersSchema()
     flags: List[ForensicFlagSchema] = []
     threat_score: Optional[ThreatScoreSchema] = None
+    ioc_extraction: Optional[IOCExtractionResultSchema] = None
 
 
 # ---------------------------------------------------------------------------

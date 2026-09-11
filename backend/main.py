@@ -9,6 +9,7 @@ from schemas import EmailResponse, ForensicAnalysisSchema
 from email_parser import parse_eml
 from forensics import analyze_headers
 from scoring import calculate_threat_score
+from ioc_extractor import extract_iocs
 
 app=FastAPI()
 
@@ -91,7 +92,11 @@ async def upload_email(
         threat_score = calculate_threat_score(analysis)
         analysis_dict["threat_score"] = asdict(threat_score)
 
-        # Persist forensic analysis (including threat_score) to database
+        # Extract IOCs from the full parsed email
+        ioc_result = extract_iocs(parsed)
+        analysis_dict["ioc_extraction"] = asdict(ioc_result)
+
+        # Persist forensic analysis (including threat_score and IOCs) to database
         db_forensic = ForensicAnalysisRecord(
             email_id=db_email.id,
             analysis=analysis_dict,
