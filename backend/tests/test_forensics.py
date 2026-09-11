@@ -6,6 +6,7 @@ from forensics import (
     ForensicAnalysis,
     ReceivedHop,
     AuthenticationHeaders,
+    AuthResultEntry,
     IdentityHeaders,
     ForensicFlag,
     analyze_headers,
@@ -17,6 +18,7 @@ from forensics import (
     _normalise_verdict,
     _parse_authentication_results,
     _parse_received_spf_verdict,
+    _extract_authserv_id,
     _populate_verdicts,
     VALID_VERDICTS,
 )
@@ -933,3 +935,946 @@ class TestParseHeaderBlock:
         raw = "From: a@b.test\nTo: c@d.test\nSubject: hi"
         headers = _parse_header_block(raw)
         assert len(headers) == 3
+
+
+# ---------------------------------------------------------------------------
+# Multi-header test fixtures
+# ---------------------------------------------------------------------------
+
+HEADERS_TWO_AUTH_RESULTS = """\
+Authentication-Results: mx1.recipient.test; spf=pass; dkim=pass; dmarc=pass
+Authentication-Results: mx2.relay.test; spf=fail; dkim=fail; dmarc=fail
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <multi-ar-001@example.test>
+Subject: Two Authentication-Results"""
+
+HEADERS_THREE_AUTH_RESULTS = """\
+Authentication-Results: mx1.recipient.test; spf=pass; dkim=pass; dmarc=pass
+Authentication-Results: mx2.relay.test; spf=softfail; dkim=none
+Authentication-Results: mx3.origin.test; spf=temperror; dmarc=fail
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <multi-ar-002@example.test>
+Subject: Three Authentication-Results"""
+
+HEADERS_MULTI_RECEIVED_SPF = """\
+Received-SPF: pass (mx1.recipient.test: sender is authorized) client-ip=1.2.3.4
+Received-SPF: fail (mx2.relay.test: sender not authorized) client-ip=5.6.7.8
+Received-SPF: softfail (mx3.origin.test: transitioning) client-ip=9.10.11.12
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <multi-spf-001@example.test>
+Subject: Multiple Received-SPF"""
+
+HEADERS_MULTI_DKIM = """\
+DKIM-Signature: v=1; a=rsa-sha256; d=example.test; s=sel1; b=abc123
+DKIM-Signature: v=1; a=rsa-sha256; d=mailinglist.test; s=sel2; b=def456
+DKIM-Signature: v=1; a=rsa-sha1; d=legacy.test; s=sel3; b=ghi789
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <multi-dkim-001@example.test>
+Subject: Multiple DKIM signatures"""
+
+HEADERS_ALL_MULTI = """\
+Authentication-Results: mx1.test; spf=pass; dkim=pass; dmarc=pass
+Authentication-Results: mx2.test; spf=fail; dkim=fail
+Received-SPF: pass (mx1: OK) client-ip=1.2.3.4
+Received-SPF: fail (mx2: not OK) client-ip=5.6.7.8
+DKIM-Signature: v=1; a=rsa-sha256; d=example.test; s=s1; b=aaa
+DKIM-Signature: v=1; a=rsa-sha256; d=list.test; s=s2; b=bbb
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <all-multi-001@example.test>
+Subject: Everything multiple"""
+
+HEADERS_FOLDED_MULTI_AUTH = """\
+Authentication-Results: mx1.recipient.test;
+\tspf=pass smtp.mailfrom=sender@example.test;
+\tdkim=pass header.d=example.test;
+\tdmarc=pass header.from=example.test
+Authentication-Results: mx2.relay.test;
+\tspf=fail smtp.mailfrom=sender@example.test
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <folded-multi-001@example.test>
+Subject: Folded multi auth"""
+
+
+# ---------------------------------------------------------------------------
+# Tests: Multiple Authentication-Results headers
+# ---------------------------------------------------------------------------
+
+class TestMultipleAuthenticationResults:
+    """Verify all Authentication-Results headers are preserved and parsed."""
+
+    def test_two_ar_headers_stored(self):
+        result = analyze_headers(HEADERS_TWO_AUTH_RESULTS)
+        assert len(result.authentication.all_authentication_results) == 2
+
+    def test_two_ar_first_header_content(self):
+        result = analyze_headers(HEADERS_TWO_AUTH_RESULTS)
+        assert "mx1.recipient.test" in result.authentication.all_authentication_results[0]
+
+    def test_two_ar_second_header_content(self):
+        result = analyze_headers(HEADERS_TWO_AUTH_RESULTS)
+        assert "mx2.relay.test" in result.authentication.all_authentication_results[1]
+
+    def test_two_ar_ordering_preserved(self):
+        result = analyze_headers(HEADERS_TWO_AUTH_RESULTS)
+        assert "mx1" in result.authentication.all_authentication_results[0]
+        assert "mx2" in result.authentication.all_authentication_results[1]
+
+    def test_two_ar_singular_returns_first(self):
+        """Backward-compat: singular property returns first header."""
+        result = analyze_headers(HEADERS_TWO_AUTH_RESULTS)
+        assert result.authentication.authentication_results is not None
+        assert "mx1.recipient.test" in result.authentication.authentication_results
+
+    def test_two_ar_singular_spf_verdict_from_first(self):
+        result = analyze_headers(HEADERS_TWO_AUTH_RESULTS)
+        assert result.authentication.spf_verdict == "pass"
+
+    def test_two_ar_all_spf_verdicts(self):
+        result = analyze_headers(HEADERS_TWO_AUTH_RESULTS)
+        assert result.authentication.all_spf_verdicts == ["pass", "fail"]
+
+    def test_two_ar_all_dkim_verdicts(self):
+        result = analyze_headers(HEADERS_TWO_AUTH_RESULTS)
+        assert result.authentication.all_dkim_verdicts == ["pass", "fail"]
+
+    def test_two_ar_all_dmarc_verdicts(self):
+        result = analyze_headers(HEADERS_TWO_AUTH_RESULTS)
+        assert result.authentication.all_dmarc_verdicts == ["pass", "fail"]
+
+    def test_three_ar_headers_stored(self):
+        result = analyze_headers(HEADERS_THREE_AUTH_RESULTS)
+        assert len(result.authentication.all_authentication_results) == 3
+
+    def test_three_ar_all_spf_verdicts(self):
+        result = analyze_headers(HEADERS_THREE_AUTH_RESULTS)
+        assert result.authentication.all_spf_verdicts == ["pass", "softfail", "temperror"]
+
+    def test_three_ar_all_dkim_verdicts(self):
+        """Third AR header has no dkim result → only 2 entries."""
+        result = analyze_headers(HEADERS_THREE_AUTH_RESULTS)
+        assert result.authentication.all_dkim_verdicts == ["pass", "none"]
+
+    def test_three_ar_all_dmarc_verdicts(self):
+        """Second AR header has no dmarc → only 2 entries."""
+        result = analyze_headers(HEADERS_THREE_AUTH_RESULTS)
+        assert result.authentication.all_dmarc_verdicts == ["pass", "fail"]
+
+    def test_three_ar_singular_from_first(self):
+        result = analyze_headers(HEADERS_THREE_AUTH_RESULTS)
+        assert result.authentication.spf_verdict == "pass"
+        assert result.authentication.dkim_verdict == "pass"
+        assert result.authentication.dmarc_verdict == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Multiple Received-SPF headers
+# ---------------------------------------------------------------------------
+
+class TestMultipleReceivedSPF:
+    """Verify all Received-SPF headers are preserved and parsed."""
+
+    def test_all_stored(self):
+        result = analyze_headers(HEADERS_MULTI_RECEIVED_SPF)
+        assert len(result.authentication.all_received_spf) == 3
+
+    def test_ordering(self):
+        result = analyze_headers(HEADERS_MULTI_RECEIVED_SPF)
+        assert "mx1" in result.authentication.all_received_spf[0]
+        assert "mx2" in result.authentication.all_received_spf[1]
+        assert "mx3" in result.authentication.all_received_spf[2]
+
+    def test_all_verdicts(self):
+        result = analyze_headers(HEADERS_MULTI_RECEIVED_SPF)
+        assert result.authentication.all_received_spf_verdicts == [
+            "pass", "fail", "softfail"
+        ]
+
+    def test_singular_verdict_from_first(self):
+        result = analyze_headers(HEADERS_MULTI_RECEIVED_SPF)
+        assert result.authentication.received_spf_verdict == "pass"
+
+    def test_singular_raw_from_first(self):
+        result = analyze_headers(HEADERS_MULTI_RECEIVED_SPF)
+        assert result.authentication.received_spf is not None
+        assert "mx1.recipient.test" in result.authentication.received_spf
+
+    def test_no_missing_auth_flag(self):
+        result = analyze_headers(HEADERS_MULTI_RECEIVED_SPF)
+        rule_ids = [f.rule_id for f in result.flags]
+        assert "MISSING_AUTH_HEADERS" not in rule_ids
+
+
+# ---------------------------------------------------------------------------
+# Tests: Multiple DKIM-Signature headers
+# ---------------------------------------------------------------------------
+
+class TestMultipleDKIMSignatures:
+    """Verify all DKIM-Signature headers are preserved."""
+
+    def test_all_stored(self):
+        result = analyze_headers(HEADERS_MULTI_DKIM)
+        assert len(result.authentication.all_dkim_signatures) == 3
+
+    def test_ordering(self):
+        result = analyze_headers(HEADERS_MULTI_DKIM)
+        assert "d=example.test" in result.authentication.all_dkim_signatures[0]
+        assert "d=mailinglist.test" in result.authentication.all_dkim_signatures[1]
+        assert "d=legacy.test" in result.authentication.all_dkim_signatures[2]
+
+    def test_singular_returns_first(self):
+        result = analyze_headers(HEADERS_MULTI_DKIM)
+        assert result.authentication.dkim_signature is not None
+        assert "d=example.test" in result.authentication.dkim_signature
+
+    def test_no_missing_auth_flag(self):
+        result = analyze_headers(HEADERS_MULTI_DKIM)
+        rule_ids = [f.rule_id for f in result.flags]
+        assert "MISSING_AUTH_HEADERS" not in rule_ids
+
+
+# ---------------------------------------------------------------------------
+# Tests: Backward compatibility
+# ---------------------------------------------------------------------------
+
+class TestMultiHeaderBackwardCompat:
+    """Verify single-header emails still work with the new list fields."""
+
+    def test_single_ar_singular_works(self):
+        result = analyze_headers(HEADERS_AUTH_SPF_PASS)
+        assert result.authentication.authentication_results is not None
+        assert "spf=pass" in result.authentication.authentication_results
+
+    def test_single_ar_list_has_one(self):
+        result = analyze_headers(HEADERS_AUTH_SPF_PASS)
+        assert len(result.authentication.all_authentication_results) == 1
+
+    def test_single_spf_singular_works(self):
+        result = analyze_headers(HEADERS_RECEIVED_SPF_PASS)
+        assert result.authentication.received_spf is not None
+        assert "pass" in result.authentication.received_spf
+
+    def test_single_spf_list_has_one(self):
+        result = analyze_headers(HEADERS_RECEIVED_SPF_PASS)
+        assert len(result.authentication.all_received_spf) == 1
+
+    def test_single_dkim_singular_works(self):
+        result = analyze_headers(HEADERS_WITH_AUTH)
+        assert result.authentication.dkim_signature is not None
+        assert "rsa-sha256" in result.authentication.dkim_signature
+
+    def test_single_dkim_list_has_one(self):
+        result = analyze_headers(HEADERS_WITH_AUTH)
+        assert len(result.authentication.all_dkim_signatures) == 1
+
+    def test_no_auth_singular_none(self):
+        result = analyze_headers(HEADERS_NO_AUTH)
+        assert result.authentication.authentication_results is None
+        assert result.authentication.received_spf is None
+        assert result.authentication.dkim_signature is None
+
+    def test_no_auth_lists_empty(self):
+        result = analyze_headers(HEADERS_NO_AUTH)
+        assert result.authentication.all_authentication_results == []
+        assert result.authentication.all_received_spf == []
+        assert result.authentication.all_dkim_signatures == []
+
+    def test_no_auth_verdict_lists_empty(self):
+        result = analyze_headers(HEADERS_NO_AUTH)
+        assert result.authentication.all_spf_verdicts == []
+        assert result.authentication.all_dkim_verdicts == []
+        assert result.authentication.all_dmarc_verdicts == []
+        assert result.authentication.all_received_spf_verdicts == []
+
+    def test_empty_headers_lists_empty(self):
+        result = analyze_headers(HEADERS_EMPTY)
+        assert result.authentication.all_authentication_results == []
+
+    def test_minimal_headers_lists_empty(self):
+        result = analyze_headers(HEADERS_MINIMAL)
+        assert result.authentication.all_authentication_results == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: Folded/repeated headers
+# ---------------------------------------------------------------------------
+
+class TestMultiHeaderFoldedRepeated:
+    """Verify folded multi-line headers combined with multiple instances."""
+
+    def test_folded_multi_ar_both_captured(self):
+        result = analyze_headers(HEADERS_FOLDED_MULTI_AUTH)
+        assert len(result.authentication.all_authentication_results) == 2
+
+    def test_folded_first_has_all_methods(self):
+        result = analyze_headers(HEADERS_FOLDED_MULTI_AUTH)
+        first = result.authentication.all_authentication_results[0]
+        assert "spf=pass" in first
+        assert "dkim=pass" in first
+        assert "dmarc=pass" in first
+
+    def test_folded_second_has_spf_fail(self):
+        result = analyze_headers(HEADERS_FOLDED_MULTI_AUTH)
+        second = result.authentication.all_authentication_results[1]
+        assert "spf=fail" in second
+
+    def test_folded_all_spf_verdicts(self):
+        result = analyze_headers(HEADERS_FOLDED_MULTI_AUTH)
+        assert result.authentication.all_spf_verdicts == ["pass", "fail"]
+
+    def test_folded_singular_verdict_from_first(self):
+        result = analyze_headers(HEADERS_FOLDED_MULTI_AUTH)
+        assert result.authentication.spf_verdict == "pass"
+        assert result.authentication.dkim_verdict == "pass"
+        assert result.authentication.dmarc_verdict == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Existing forensic flags with multi-header data
+# ---------------------------------------------------------------------------
+
+class TestMultiHeaderFlags:
+    """Verify existing forensic flags behave correctly with multi-header data."""
+
+    def test_multi_ar_no_missing_auth_flag(self):
+        result = analyze_headers(HEADERS_TWO_AUTH_RESULTS)
+        rule_ids = [f.rule_id for f in result.flags]
+        assert "MISSING_AUTH_HEADERS" not in rule_ids
+
+    def test_multi_dkim_only_no_missing_auth_flag(self):
+        result = analyze_headers(HEADERS_MULTI_DKIM)
+        rule_ids = [f.rule_id for f in result.flags]
+        assert "MISSING_AUTH_HEADERS" not in rule_ids
+
+    def test_no_auth_missing_flag_still_fires(self):
+        result = analyze_headers(HEADERS_NO_AUTH)
+        rule_ids = [f.rule_id for f in result.flags]
+        assert "MISSING_AUTH_HEADERS" in rule_ids
+
+    def test_empty_missing_flag_still_fires(self):
+        result = analyze_headers(HEADERS_EMPTY)
+        rule_ids = [f.rule_id for f in result.flags]
+        assert "MISSING_AUTH_HEADERS" in rule_ids
+
+    def test_all_multi_combined(self):
+        """Headers with everything multiple — no missing-auth flag."""
+        result = analyze_headers(HEADERS_ALL_MULTI)
+        rule_ids = [f.rule_id for f in result.flags]
+        assert "MISSING_AUTH_HEADERS" not in rule_ids
+
+    def test_all_multi_verdict_lists(self):
+        result = analyze_headers(HEADERS_ALL_MULTI)
+        assert result.authentication.all_spf_verdicts == ["pass", "fail"]
+        assert result.authentication.all_dkim_verdicts == ["pass", "fail"]
+        assert result.authentication.all_dmarc_verdicts == ["pass"]
+        assert result.authentication.all_received_spf_verdicts == ["pass", "fail"]
+        assert len(result.authentication.all_dkim_signatures) == 2
+
+
+# ---------------------------------------------------------------------------
+# Authserv-id test fixtures
+# ---------------------------------------------------------------------------
+
+HEADERS_AUTHSERV_SINGLE = """\
+Authentication-Results: mx1.example.com; spf=pass; dkim=pass; dmarc=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <authserv-001@example.test>
+Subject: Single AR authserv-id"""
+
+HEADERS_AUTHSERV_MULTI = """\
+Authentication-Results: mx1.recipient.com; spf=pass; dkim=pass; dmarc=pass
+Authentication-Results: relay2.middlehop.org; spf=softfail; dkim=fail
+Authentication-Results: origin3.sender.net; spf=fail; dmarc=fail
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <authserv-002@example.test>
+Subject: Multiple AR authserv-id"""
+
+HEADERS_AUTHSERV_CONFUSING_SPF = """\
+Authentication-Results: spf.validator.example.com; spf=pass; dkim=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <authserv-003@example.test>
+Subject: Confusing hostname containing spf"""
+
+HEADERS_AUTHSERV_CONFUSING_DKIM = """\
+Authentication-Results: dkim-checker.example.com; spf=fail; dkim=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <authserv-004@example.test>
+Subject: Confusing hostname containing dkim"""
+
+HEADERS_AUTHSERV_CONFUSING_DMARC = """\
+Authentication-Results: dmarc.report.example.com; dmarc=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <authserv-005@example.test>
+Subject: Confusing hostname containing dmarc"""
+
+HEADERS_AUTHSERV_FOLDED = """\
+Authentication-Results: mx1.example.com;
+\tspf=pass smtp.mailfrom=sender@example.test;
+\tdkim=pass header.d=example.test;
+\tdmarc=pass header.from=example.test
+Authentication-Results: relay2.example.com;
+\tspf=fail
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <authserv-006@example.test>
+Subject: Folded AR with authserv-id"""
+
+HEADERS_AUTHSERV_MALFORMED = """\
+Authentication-Results: 
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <authserv-007@example.test>
+Subject: Empty/malformed AR"""
+
+HEADERS_AUTHSERV_NO_SEMICOLON = """\
+Authentication-Results: mx.broken.test
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <authserv-008@example.test>
+Subject: AR with no semicolon"""
+
+HEADERS_AUTHSERV_WITH_VERSION = """\
+Authentication-Results: mx.example.com 1; spf=pass; dkim=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <authserv-009@example.test>
+Subject: AR with version number"""
+
+
+# ---------------------------------------------------------------------------
+# Tests: _extract_authserv_id unit tests
+# ---------------------------------------------------------------------------
+
+class TestExtractAuthservId:
+    """Unit tests for the authserv-id extraction helper."""
+
+    def test_simple_hostname(self):
+        assert _extract_authserv_id("mx.example.com; spf=pass") == "mx.example.com"
+
+    def test_hostname_with_whitespace(self):
+        assert _extract_authserv_id("  mx.example.com  ; spf=pass") == "mx.example.com"
+
+    def test_hostname_containing_spf(self):
+        assert _extract_authserv_id("spf.checker.test; spf=pass") == "spf.checker.test"
+
+    def test_hostname_containing_dkim(self):
+        assert _extract_authserv_id("dkim-verifier.test; dkim=pass") == "dkim-verifier.test"
+
+    def test_hostname_containing_dmarc(self):
+        assert _extract_authserv_id("dmarc.report.test; dmarc=pass") == "dmarc.report.test"
+
+    def test_no_semicolon(self):
+        assert _extract_authserv_id("mx.broken.test") == "mx.broken.test"
+
+    def test_empty_string(self):
+        assert _extract_authserv_id("") == ""
+
+    def test_only_whitespace(self):
+        assert _extract_authserv_id("   ") == ""
+
+    def test_semicolon_only(self):
+        assert _extract_authserv_id("; spf=pass") == ""
+
+    def test_with_version_number(self):
+        """RFC 7601 allows 'authserv-id [version]' before the semicolon."""
+        assert _extract_authserv_id("mx.example.com 1; spf=pass") == "mx.example.com 1"
+
+    def test_complex_results_after_semicolon(self):
+        val = "mx.google.com; spf=pass (sender verified) smtp.mailfrom=user@test.com; dkim=pass"
+        assert _extract_authserv_id(val) == "mx.google.com"
+
+    def test_folded_header_value(self):
+        """After header unfolding, continuation whitespace becomes spaces."""
+        val = "mx.example.com; spf=pass smtp.mailfrom=sender@example.test; dkim=pass header.d=example.test"
+        assert _extract_authserv_id(val) == "mx.example.com"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Authserv-id in single Authentication-Results header
+# ---------------------------------------------------------------------------
+
+class TestAuthservIdSingle:
+    """Verify authserv-id extraction for a single AR header."""
+
+    def test_entry_created(self):
+        result = analyze_headers(HEADERS_AUTHSERV_SINGLE)
+        assert len(result.authentication.auth_results_entries) == 1
+
+    def test_authserv_id_extracted(self):
+        result = analyze_headers(HEADERS_AUTHSERV_SINGLE)
+        entry = result.authentication.auth_results_entries[0]
+        assert entry.authserv_id == "mx1.example.com"
+
+    def test_entry_has_raw(self):
+        result = analyze_headers(HEADERS_AUTHSERV_SINGLE)
+        entry = result.authentication.auth_results_entries[0]
+        assert "spf=pass" in entry.raw
+        assert "mx1.example.com" in entry.raw
+
+    def test_entry_spf_verdict(self):
+        result = analyze_headers(HEADERS_AUTHSERV_SINGLE)
+        assert result.authentication.auth_results_entries[0].spf == "pass"
+
+    def test_entry_dkim_verdict(self):
+        result = analyze_headers(HEADERS_AUTHSERV_SINGLE)
+        assert result.authentication.auth_results_entries[0].dkim == "pass"
+
+    def test_entry_dmarc_verdict(self):
+        result = analyze_headers(HEADERS_AUTHSERV_SINGLE)
+        assert result.authentication.auth_results_entries[0].dmarc == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Authserv-id in multiple Authentication-Results headers
+# ---------------------------------------------------------------------------
+
+class TestAuthservIdMultiple:
+    """Verify authserv-id extraction across multiple AR headers."""
+
+    def test_three_entries_created(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        assert len(result.authentication.auth_results_entries) == 3
+
+    def test_ordering_preserved(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        ids = [e.authserv_id for e in result.authentication.auth_results_entries]
+        assert ids == [
+            "mx1.recipient.com",
+            "relay2.middlehop.org",
+            "origin3.sender.net",
+        ]
+
+    def test_first_entry_verdicts(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        e = result.authentication.auth_results_entries[0]
+        assert e.spf == "pass"
+        assert e.dkim == "pass"
+        assert e.dmarc == "pass"
+
+    def test_second_entry_verdicts(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        e = result.authentication.auth_results_entries[1]
+        assert e.spf == "softfail"
+        assert e.dkim == "fail"
+        assert e.dmarc is None  # not present in second header
+
+    def test_third_entry_verdicts(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        e = result.authentication.auth_results_entries[2]
+        assert e.spf == "fail"
+        assert e.dkim is None
+        assert e.dmarc == "fail"
+
+    def test_each_entry_has_raw(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        for entry in result.authentication.auth_results_entries:
+            assert len(entry.raw) > 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Confusing hostnames containing method names
+# ---------------------------------------------------------------------------
+
+class TestAuthservIdConfusingHostnames:
+    """Hostnames containing 'spf', 'dkim', or 'dmarc' must not confuse parsing."""
+
+    def test_hostname_containing_spf(self):
+        result = analyze_headers(HEADERS_AUTHSERV_CONFUSING_SPF)
+        entry = result.authentication.auth_results_entries[0]
+        assert entry.authserv_id == "spf.validator.example.com"
+        assert entry.spf == "pass"
+        assert entry.dkim == "pass"
+
+    def test_hostname_containing_dkim(self):
+        result = analyze_headers(HEADERS_AUTHSERV_CONFUSING_DKIM)
+        entry = result.authentication.auth_results_entries[0]
+        assert entry.authserv_id == "dkim-checker.example.com"
+        assert entry.spf == "fail"
+        assert entry.dkim == "pass"
+
+    def test_hostname_containing_dmarc(self):
+        result = analyze_headers(HEADERS_AUTHSERV_CONFUSING_DMARC)
+        entry = result.authentication.auth_results_entries[0]
+        assert entry.authserv_id == "dmarc.report.example.com"
+        assert entry.dmarc == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Folded AR headers with authserv-id
+# ---------------------------------------------------------------------------
+
+class TestAuthservIdFolded:
+    """Folded (multi-line) AR headers should correctly extract authserv-id."""
+
+    def test_folded_two_entries(self):
+        result = analyze_headers(HEADERS_AUTHSERV_FOLDED)
+        assert len(result.authentication.auth_results_entries) == 2
+
+    def test_folded_first_authserv_id(self):
+        result = analyze_headers(HEADERS_AUTHSERV_FOLDED)
+        assert result.authentication.auth_results_entries[0].authserv_id == "mx1.example.com"
+
+    def test_folded_second_authserv_id(self):
+        result = analyze_headers(HEADERS_AUTHSERV_FOLDED)
+        assert result.authentication.auth_results_entries[1].authserv_id == "relay2.example.com"
+
+    def test_folded_first_entry_verdicts(self):
+        result = analyze_headers(HEADERS_AUTHSERV_FOLDED)
+        e = result.authentication.auth_results_entries[0]
+        assert e.spf == "pass"
+        assert e.dkim == "pass"
+        assert e.dmarc == "pass"
+
+    def test_folded_second_entry_verdicts(self):
+        result = analyze_headers(HEADERS_AUTHSERV_FOLDED)
+        e = result.authentication.auth_results_entries[1]
+        assert e.spf == "fail"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Malformed / empty AR headers
+# ---------------------------------------------------------------------------
+
+class TestAuthservIdMalformed:
+    """Edge cases: empty, whitespace-only, no-semicolon AR headers."""
+
+    def test_empty_ar_value(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MALFORMED)
+        assert len(result.authentication.auth_results_entries) == 1
+        assert result.authentication.auth_results_entries[0].authserv_id == ""
+
+    def test_no_semicolon(self):
+        result = analyze_headers(HEADERS_AUTHSERV_NO_SEMICOLON)
+        entry = result.authentication.auth_results_entries[0]
+        assert entry.authserv_id == "mx.broken.test"
+        assert entry.spf is None
+        assert entry.dkim is None
+        assert entry.dmarc is None
+
+    def test_with_version(self):
+        result = analyze_headers(HEADERS_AUTHSERV_WITH_VERSION)
+        entry = result.authentication.auth_results_entries[0]
+        # "mx.example.com 1" — the version is part of the pre-semicolon text
+        assert "mx.example.com" in entry.authserv_id
+
+    def test_no_ar_headers(self):
+        result = analyze_headers(HEADERS_NO_AUTH)
+        assert result.authentication.auth_results_entries == []
+
+    def test_empty_headers(self):
+        result = analyze_headers(HEADERS_EMPTY)
+        assert result.authentication.auth_results_entries == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: Entry-to-verdict relationship
+# ---------------------------------------------------------------------------
+
+class TestAuthservIdVerdictRelationship:
+    """Each entry's verdicts must correspond to its specific AR header."""
+
+    def test_different_spf_per_header(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        entries = result.authentication.auth_results_entries
+        assert entries[0].spf == "pass"
+        assert entries[1].spf == "softfail"
+        assert entries[2].spf == "fail"
+
+    def test_entry_verdicts_match_all_lists(self):
+        """The per-entry verdicts should be consistent with all_*_verdicts."""
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        entries = result.authentication.auth_results_entries
+        entry_spf = [e.spf for e in entries if e.spf is not None]
+        assert entry_spf == result.authentication.all_spf_verdicts
+
+    def test_entry_dkim_matches_all_list(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        entries = result.authentication.auth_results_entries
+        entry_dkim = [e.dkim for e in entries if e.dkim is not None]
+        assert entry_dkim == result.authentication.all_dkim_verdicts
+
+    def test_entry_dmarc_matches_all_list(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        entries = result.authentication.auth_results_entries
+        entry_dmarc = [e.dmarc for e in entries if e.dmarc is not None]
+        assert entry_dmarc == result.authentication.all_dmarc_verdicts
+
+    def test_singular_verdict_matches_first_entry(self):
+        result = analyze_headers(HEADERS_AUTHSERV_MULTI)
+        first = result.authentication.auth_results_entries[0]
+        assert result.authentication.spf_verdict == first.spf
+        assert result.authentication.dkim_verdict == first.dkim
+        assert result.authentication.dmarc_verdict == first.dmarc
+
+
+# ---------------------------------------------------------------------------
+# Auth-failure detection test fixtures
+# ---------------------------------------------------------------------------
+
+HEADERS_SPF_FAIL_ONLY = """\
+Authentication-Results: mx.test; spf=fail; dkim=pass; dmarc=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-001@example.test>
+Subject: SPF fail only"""
+
+HEADERS_DKIM_FAIL_ONLY = """\
+Authentication-Results: mx.test; spf=pass; dkim=fail; dmarc=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-002@example.test>
+Subject: DKIM fail only"""
+
+HEADERS_DMARC_FAIL_ONLY = """\
+Authentication-Results: mx.test; spf=pass; dkim=pass; dmarc=fail
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-003@example.test>
+Subject: DMARC fail only"""
+
+HEADERS_SPF_SOFTFAIL_ONLY = """\
+Authentication-Results: mx.test; spf=softfail; dkim=pass; dmarc=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-004@example.test>
+Subject: SPF softfail only"""
+
+HEADERS_ALL_PASS = """\
+Authentication-Results: mx.test; spf=pass; dkim=pass; dmarc=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-005@example.test>
+Subject: All pass"""
+
+HEADERS_ALL_FAIL = """\
+Authentication-Results: mx.test; spf=fail; dkim=fail; dmarc=fail
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-006@example.test>
+Subject: All fail"""
+
+HEADERS_MULTI_SAME_FAILURE = """\
+Authentication-Results: mx1.test; spf=fail; dkim=pass
+Authentication-Results: mx2.test; spf=fail; dkim=pass
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-007@example.test>
+Subject: Same failure in multiple headers"""
+
+HEADERS_MULTI_DIFFERENT_FAILURES = """\
+Authentication-Results: mx1.test; spf=fail; dkim=pass; dmarc=pass
+Authentication-Results: mx2.test; spf=pass; dkim=fail; dmarc=fail
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-008@example.test>
+Subject: Different failures across headers"""
+
+HEADERS_NEUTRAL_NONE_TEMPERROR = """\
+Authentication-Results: mx.test; spf=neutral; dkim=none; dmarc=temperror
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-009@example.test>
+Subject: Neutral none temperror"""
+
+HEADERS_PERMERROR = """\
+Authentication-Results: mx.test; spf=permerror; dkim=permerror; dmarc=permerror
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-010@example.test>
+Subject: All permerror"""
+
+HEADERS_RECEIVED_SPF_FAIL = """\
+Received-SPF: fail (mx.test: not authorized) client-ip=1.2.3.4
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-011@example.test>
+Subject: Received-SPF fail"""
+
+HEADERS_RECEIVED_SPF_SOFTFAIL = """\
+Received-SPF: softfail (mx.test: transitioning) client-ip=1.2.3.4
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-012@example.test>
+Subject: Received-SPF softfail"""
+
+HEADERS_SPF_FAIL_AND_SOFTFAIL = """\
+Authentication-Results: mx1.test; spf=fail
+Authentication-Results: mx2.test; spf=softfail
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <fail-013@example.test>
+Subject: SPF fail and softfail"""
+
+
+# ---------------------------------------------------------------------------
+# Tests: Authentication failure detection rules
+# ---------------------------------------------------------------------------
+
+class TestAuthFailureDetection:
+    """Core tests for SPF_FAIL, DKIM_FAIL, DMARC_FAIL, SPF_SOFTFAIL flags."""
+
+    def _rule_ids(self, headers):
+        return [f.rule_id for f in analyze_headers(headers).flags]
+
+    # --- Individual failures ---
+
+    def test_spf_fail_flag(self):
+        assert "SPF_FAIL" in self._rule_ids(HEADERS_SPF_FAIL_ONLY)
+
+    def test_dkim_fail_flag(self):
+        assert "DKIM_FAIL" in self._rule_ids(HEADERS_DKIM_FAIL_ONLY)
+
+    def test_dmarc_fail_flag(self):
+        assert "DMARC_FAIL" in self._rule_ids(HEADERS_DMARC_FAIL_ONLY)
+
+    def test_spf_softfail_flag(self):
+        assert "SPF_SOFTFAIL" in self._rule_ids(HEADERS_SPF_SOFTFAIL_ONLY)
+
+    # --- Severities ---
+
+    def test_spf_fail_severity(self):
+        flags = analyze_headers(HEADERS_SPF_FAIL_ONLY).flags
+        spf = [f for f in flags if f.rule_id == "SPF_FAIL"][0]
+        assert spf.severity == "warning"
+
+    def test_dkim_fail_severity(self):
+        flags = analyze_headers(HEADERS_DKIM_FAIL_ONLY).flags
+        dkim = [f for f in flags if f.rule_id == "DKIM_FAIL"][0]
+        assert dkim.severity == "warning"
+
+    def test_dmarc_fail_severity(self):
+        flags = analyze_headers(HEADERS_DMARC_FAIL_ONLY).flags
+        dmarc = [f for f in flags if f.rule_id == "DMARC_FAIL"][0]
+        assert dmarc.severity == "warning"
+
+    def test_spf_softfail_severity(self):
+        flags = analyze_headers(HEADERS_SPF_SOFTFAIL_ONLY).flags
+        sf = [f for f in flags if f.rule_id == "SPF_SOFTFAIL"][0]
+        assert sf.severity == "info"
+
+    # --- All passing → no auth failure flags ---
+
+    def test_all_pass_no_spf_fail(self):
+        assert "SPF_FAIL" not in self._rule_ids(HEADERS_ALL_PASS)
+
+    def test_all_pass_no_dkim_fail(self):
+        assert "DKIM_FAIL" not in self._rule_ids(HEADERS_ALL_PASS)
+
+    def test_all_pass_no_dmarc_fail(self):
+        assert "DMARC_FAIL" not in self._rule_ids(HEADERS_ALL_PASS)
+
+    def test_all_pass_no_spf_softfail(self):
+        assert "SPF_SOFTFAIL" not in self._rule_ids(HEADERS_ALL_PASS)
+
+    # --- All failures at once ---
+
+    def test_all_fail_has_spf(self):
+        assert "SPF_FAIL" in self._rule_ids(HEADERS_ALL_FAIL)
+
+    def test_all_fail_has_dkim(self):
+        assert "DKIM_FAIL" in self._rule_ids(HEADERS_ALL_FAIL)
+
+    def test_all_fail_has_dmarc(self):
+        assert "DMARC_FAIL" in self._rule_ids(HEADERS_ALL_FAIL)
+
+    # --- Neutral / none / temperror / permerror → no fail flags ---
+
+    def test_neutral_no_fail_flags(self):
+        ids = self._rule_ids(HEADERS_NEUTRAL_NONE_TEMPERROR)
+        assert "SPF_FAIL" not in ids
+        assert "DKIM_FAIL" not in ids
+        assert "DMARC_FAIL" not in ids
+        assert "SPF_SOFTFAIL" not in ids
+
+    def test_permerror_no_fail_flags(self):
+        ids = self._rule_ids(HEADERS_PERMERROR)
+        assert "SPF_FAIL" not in ids
+        assert "DKIM_FAIL" not in ids
+        assert "DMARC_FAIL" not in ids
+
+    # --- No authentication headers → no auth failure flags ---
+
+    def test_no_auth_no_fail_flags(self):
+        ids = self._rule_ids(HEADERS_NO_AUTH)
+        assert "SPF_FAIL" not in ids
+        assert "DKIM_FAIL" not in ids
+        assert "DMARC_FAIL" not in ids
+        assert "SPF_SOFTFAIL" not in ids
+
+    def test_empty_no_fail_flags(self):
+        ids = self._rule_ids(HEADERS_EMPTY)
+        assert "SPF_FAIL" not in ids
+
+
+class TestAuthFailureMultiHeader:
+    """Multi-header scenarios: no duplicate flags, cross-header detection."""
+
+    def _rule_ids(self, headers):
+        return [f.rule_id for f in analyze_headers(headers).flags]
+
+    def test_same_failure_no_duplicate(self):
+        """SPF fail in 2 headers → exactly 1 SPF_FAIL flag."""
+        ids = self._rule_ids(HEADERS_MULTI_SAME_FAILURE)
+        assert ids.count("SPF_FAIL") == 1
+
+    def test_different_failures_all_detected(self):
+        """spf=fail in header1, dkim=fail+dmarc=fail in header2."""
+        ids = self._rule_ids(HEADERS_MULTI_DIFFERENT_FAILURES)
+        assert "SPF_FAIL" in ids
+        assert "DKIM_FAIL" in ids
+        assert "DMARC_FAIL" in ids
+
+    def test_different_failures_no_duplicates(self):
+        ids = self._rule_ids(HEADERS_MULTI_DIFFERENT_FAILURES)
+        assert ids.count("SPF_FAIL") == 1
+        assert ids.count("DKIM_FAIL") == 1
+        assert ids.count("DMARC_FAIL") == 1
+
+    def test_received_spf_fail_triggers(self):
+        """SPF fail from Received-SPF header also triggers SPF_FAIL."""
+        assert "SPF_FAIL" in self._rule_ids(HEADERS_RECEIVED_SPF_FAIL)
+
+    def test_received_spf_softfail_triggers(self):
+        """Softfail from Received-SPF header triggers SPF_SOFTFAIL."""
+        assert "SPF_SOFTFAIL" in self._rule_ids(HEADERS_RECEIVED_SPF_SOFTFAIL)
+
+    def test_fail_and_softfail_both_fire(self):
+        """Both SPF_FAIL and SPF_SOFTFAIL fire when both verdicts present."""
+        ids = self._rule_ids(HEADERS_SPF_FAIL_AND_SOFTFAIL)
+        assert "SPF_FAIL" in ids
+        assert "SPF_SOFTFAIL" in ids
+
+
+class TestAuthFailureDescriptions:
+    """Verify flag descriptions use 'reported' wording, not absolute claims."""
+
+    def test_spf_fail_says_reported(self):
+        flags = analyze_headers(HEADERS_SPF_FAIL_ONLY).flags
+        spf = [f for f in flags if f.rule_id == "SPF_FAIL"][0]
+        assert "reported" in spf.description.lower()
+
+    def test_dkim_fail_says_reported(self):
+        flags = analyze_headers(HEADERS_DKIM_FAIL_ONLY).flags
+        dkim = [f for f in flags if f.rule_id == "DKIM_FAIL"][0]
+        assert "reported" in dkim.description.lower()
+
+    def test_dmarc_fail_says_reported(self):
+        flags = analyze_headers(HEADERS_DMARC_FAIL_ONLY).flags
+        dmarc = [f for f in flags if f.rule_id == "DMARC_FAIL"][0]
+        assert "reported" in dmarc.description.lower()
+
+    def test_spf_softfail_says_reported(self):
+        flags = analyze_headers(HEADERS_SPF_SOFTFAIL_ONLY).flags
+        sf = [f for f in flags if f.rule_id == "SPF_SOFTFAIL"][0]
+        assert "reported" in sf.description.lower()
+

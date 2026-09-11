@@ -55,23 +55,90 @@ def _normalise_verdict(raw: str) -> Optional[str]:
     return None
 
 
+
+@dataclass
+class AuthResultEntry:
+    """One parsed Authentication-Results header with its authserv-id.
+
+    Per RFC 7601 the header format is::
+
+        Authentication-Results: <authserv-id>; <method>=<result> ...
+
+    The ``authserv_id`` identifies the service that evaluated the message.
+    It is **not** inherently trusted — any MTA in the delivery chain can
+    inject an ``Authentication-Results`` header with an arbitrary
+    ``authserv-id``.
+    """
+
+    authserv_id: str = ""
+    raw: str = ""
+    spf: Optional[str] = None
+    dkim: Optional[str] = None
+    dmarc: Optional[str] = None
+
+
 @dataclass
 class AuthenticationHeaders:
-    """Authentication-related headers — raw values plus structured verdicts."""
+    """Authentication-related headers — raw values plus structured verdicts.
 
-    # Raw header values (preserved verbatim, unchanged from before)
-    authentication_results: Optional[str] = None
-    received_spf: Optional[str] = None
-    dkim_signature: Optional[str] = None
+    Multi-header support
+    ~~~~~~~~~~~~~~~~~~~~
+    Real-world emails commonly contain multiple ``Authentication-Results``,
+    ``Received-SPF``, and ``DKIM-Signature`` headers (one per receiving MTA
+    or signing domain).  All occurrences are preserved in order in the
+    ``all_*`` list fields.
+
+    For backward compatibility the singular property names
+    (``authentication_results``, ``received_spf``, ``dkim_signature``)
+    return the **first** item from the corresponding list (or ``None``).
+    """
+
+    # --- Raw header values (ALL occurrences, in header order) ---
+    all_authentication_results: List[str] = field(default_factory=list)
+    all_received_spf: List[str] = field(default_factory=list)
+    all_dkim_signatures: List[str] = field(default_factory=list)
+
+    # ARC headers — still singular (multi-instance ARC is a future task)
     arc_authentication_results: Optional[str] = None
     arc_seal: Optional[str] = None
     arc_message_signature: Optional[str] = None
 
-    # Structured verdicts parsed from the raw headers above
-    spf_verdict: Optional[str] = None      # from Authentication-Results
-    dkim_verdict: Optional[str] = None     # from Authentication-Results
-    dmarc_verdict: Optional[str] = None    # from Authentication-Results
-    received_spf_verdict: Optional[str] = None  # from Received-SPF header
+    # --- Structured verdicts (first Authentication-Results header) ---
+    spf_verdict: Optional[str] = None
+    dkim_verdict: Optional[str] = None
+    dmarc_verdict: Optional[str] = None
+
+    # --- Structured verdict from first Received-SPF header ---
+    received_spf_verdict: Optional[str] = None
+
+    # --- All verdicts across all Authentication-Results headers ---
+    all_spf_verdicts: List[str] = field(default_factory=list)
+    all_dkim_verdicts: List[str] = field(default_factory=list)
+    all_dmarc_verdicts: List[str] = field(default_factory=list)
+
+    # --- All verdicts across all Received-SPF headers ---
+    all_received_spf_verdicts: List[str] = field(default_factory=list)
+
+    # --- Per-header structured Authentication-Results entries ---
+    auth_results_entries: List[AuthResultEntry] = field(default_factory=list)
+
+    # --- Backward-compatible properties ---
+
+    @property
+    def authentication_results(self) -> Optional[str]:
+        """First Authentication-Results header, or None."""
+        return self.all_authentication_results[0] if self.all_authentication_results else None
+
+    @property
+    def received_spf(self) -> Optional[str]:
+        """First Received-SPF header, or None."""
+        return self.all_received_spf[0] if self.all_received_spf else None
+
+    @property
+    def dkim_signature(self) -> Optional[str]:
+        """First DKIM-Signature header, or None."""
+        return self.all_dkim_signatures[0] if self.all_dkim_signatures else None
+
 
 
 @dataclass
@@ -325,9 +392,9 @@ def _detect_inconsistencies(
 
     # RULE 3: Missing authentication information
     has_auth = any([
-        authentication.authentication_results,
-        authentication.received_spf,
-        authentication.dkim_signature,
+        authentication.all_authentication_results,
+        authentication.all_received_spf,
+        authentication.all_dkim_signatures,
     ])
     if not has_auth:
         flags.append(ForensicFlag(
@@ -370,6 +437,79 @@ def _detect_inconsistencies(
                 evidence=f"Hop {hop.hop_number} raw: {hop.raw[:120]}",
             ))
 
+    # RULE 6: SPF failure reported in authentication headers
+    all_spf = set(authentication.all_spf_verdicts)
+    all_spf.update(authentication.all_received_spf_verdicts)
+    if "fail" in all_spf:
+        flags.append(ForensicFlag(
+            rule_id="SPF_FAIL",
+            severity="warning",
+            description=(
+                "An authentication header reported an SPF failure. "
+                "This indicates the sending IP address was not authorized "
+                "by the sender's domain SPF policy, as reported by the "
+                "evaluating mail server."
+            ),
+            evidence=(
+                f"SPF verdicts (Authentication-Results): "
+                f"{authentication.all_spf_verdicts}, "
+                f"SPF verdicts (Received-SPF): "
+                f"{authentication.all_received_spf_verdicts}"
+            ),
+        ))
+
+    # RULE 7: DKIM failure reported in authentication headers
+    if "fail" in authentication.all_dkim_verdicts:
+        flags.append(ForensicFlag(
+            rule_id="DKIM_FAIL",
+            severity="warning",
+            description=(
+                "An authentication header reported a DKIM failure. "
+                "This indicates the DKIM signature did not verify, "
+                "suggesting possible message modification in transit, "
+                "as reported by the evaluating mail server."
+            ),
+            evidence=(
+                f"DKIM verdicts: {authentication.all_dkim_verdicts}"
+            ),
+        ))
+
+    # RULE 8: DMARC failure reported in authentication headers
+    if "fail" in authentication.all_dmarc_verdicts:
+        flags.append(ForensicFlag(
+            rule_id="DMARC_FAIL",
+            severity="warning",
+            description=(
+                "An authentication header reported a DMARC failure. "
+                "This indicates the message did not align with the "
+                "domain's DMARC policy, as reported by the evaluating "
+                "mail server."
+            ),
+            evidence=(
+                f"DMARC verdicts: {authentication.all_dmarc_verdicts}"
+            ),
+        ))
+
+    # RULE 9: SPF softfail reported in authentication headers
+    if "softfail" in all_spf:
+        flags.append(ForensicFlag(
+            rule_id="SPF_SOFTFAIL",
+            severity="info",
+            description=(
+                "An authentication header reported an SPF softfail. "
+                "This typically indicates the sender's domain is "
+                "transitioning its SPF policy and the sending IP was "
+                "not fully authorized, as reported by the evaluating "
+                "mail server."
+            ),
+            evidence=(
+                f"SPF verdicts (Authentication-Results): "
+                f"{authentication.all_spf_verdicts}, "
+                f"SPF verdicts (Received-SPF): "
+                f"{authentication.all_received_spf_verdicts}"
+            ),
+        ))
+
     return flags
 
 
@@ -389,6 +529,29 @@ _RE_AUTH_RESULT_VERDICT = re.compile(
 _RE_RECEIVED_SPF_VERDICT = re.compile(
     r"^\s*(\S+)", re.IGNORECASE
 )
+
+
+def _extract_authserv_id(header_value: str) -> str:
+    """Extract the authserv-id from an Authentication-Results header value.
+
+    Per RFC 7601 §2.2 the header format is::
+
+        Authentication-Results: authserv-id; method=result ...
+
+    The authserv-id is the text before the first semicolon.  It is
+    typically a hostname (e.g. ``mx.example.com``), optionally followed
+    by a version number.
+
+    Returns the extracted authserv-id stripped of whitespace, or an empty
+    string if none can be determined.
+    """
+    # Split on the first semicolon; everything before it is the authserv-id.
+    semi_pos = header_value.find(";")
+    if semi_pos == -1:
+        # No semicolon → the entire value may be a malformed header or just
+        # an authserv-id with no results.  Return it stripped.
+        return header_value.strip()
+    return header_value[:semi_pos].strip()
 
 
 def _parse_authentication_results(header_value: str) -> dict:
@@ -429,20 +592,47 @@ def _parse_received_spf_verdict(header_value: str) -> Optional[str]:
 def _populate_verdicts(auth: AuthenticationHeaders) -> None:
     """Parse structured verdicts from raw authentication headers.
 
-    Mutates the auth dataclass in place, setting the verdict fields.
+    Mutates the auth dataclass in place, setting the singular verdict
+    fields (from the first header), the ``all_*`` verdict lists (from
+    every header), and the ``auth_results_entries`` list that ties each
+    ``Authentication-Results`` header to its ``authserv-id``.
     """
-    # Parse Authentication-Results
-    if auth.authentication_results:
-        verdicts = _parse_authentication_results(auth.authentication_results)
-        auth.spf_verdict = verdicts.get("spf")
-        auth.dkim_verdict = verdicts.get("dkim")
-        auth.dmarc_verdict = verdicts.get("dmarc")
+    # Parse all Authentication-Results headers
+    for i, header_value in enumerate(auth.all_authentication_results):
+        verdicts = _parse_authentication_results(header_value)
+        authserv_id = _extract_authserv_id(header_value)
 
-    # Parse Received-SPF
-    if auth.received_spf:
-        auth.received_spf_verdict = _parse_received_spf_verdict(
-            auth.received_spf
+        # Build a structured entry for this header
+        entry = AuthResultEntry(
+            authserv_id=authserv_id,
+            raw=header_value,
+            spf=verdicts.get("spf"),
+            dkim=verdicts.get("dkim"),
+            dmarc=verdicts.get("dmarc"),
         )
+        auth.auth_results_entries.append(entry)
+
+        # Collect per-method verdicts into all_* lists
+        if "spf" in verdicts:
+            auth.all_spf_verdicts.append(verdicts["spf"])
+        if "dkim" in verdicts:
+            auth.all_dkim_verdicts.append(verdicts["dkim"])
+        if "dmarc" in verdicts:
+            auth.all_dmarc_verdicts.append(verdicts["dmarc"])
+        # First header sets the singular verdict fields
+        if i == 0:
+            auth.spf_verdict = verdicts.get("spf")
+            auth.dkim_verdict = verdicts.get("dkim")
+            auth.dmarc_verdict = verdicts.get("dmarc")
+
+    # Parse all Received-SPF headers
+    for i, header_value in enumerate(auth.all_received_spf):
+        verdict = _parse_received_spf_verdict(header_value)
+        if verdict is not None:
+            auth.all_received_spf_verdicts.append(verdict)
+        # First header sets the singular verdict field
+        if i == 0:
+            auth.received_spf_verdict = verdict
 
 
 # ---------------------------------------------------------------------------
@@ -472,12 +662,12 @@ def analyze_headers(raw_headers: str) -> ForensicAnalysis:
     auth = AuthenticationHeaders()
     for name, value in parsed:
         lower = name.lower()
-        if lower == "authentication-results" and auth.authentication_results is None:
-            auth.authentication_results = value
-        elif lower == "received-spf" and auth.received_spf is None:
-            auth.received_spf = value
-        elif lower == "dkim-signature" and auth.dkim_signature is None:
-            auth.dkim_signature = value
+        if lower == "authentication-results":
+            auth.all_authentication_results.append(value)
+        elif lower == "received-spf":
+            auth.all_received_spf.append(value)
+        elif lower == "dkim-signature":
+            auth.all_dkim_signatures.append(value)
         elif lower == "arc-authentication-results" and auth.arc_authentication_results is None:
             auth.arc_authentication_results = value
         elif lower == "arc-seal" and auth.arc_seal is None:

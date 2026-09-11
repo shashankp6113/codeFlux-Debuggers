@@ -722,3 +722,173 @@ class TestConfiguration:
     def test_all_multipliers_positive(self):
         for m in SEVERITY_MULTIPLIERS.values():
             assert m > 0
+
+
+# ---------------------------------------------------------------------------
+# 15. Authentication failure scoring rules
+# ---------------------------------------------------------------------------
+
+class TestAuthFailureScoring:
+    """Each new auth-failure rule contributes correctly to the score."""
+
+    def test_spf_fail_weight(self):
+        assert RULE_WEIGHTS["SPF_FAIL"] == 15
+
+    def test_dkim_fail_weight(self):
+        assert RULE_WEIGHTS["DKIM_FAIL"] == 15
+
+    def test_dmarc_fail_weight(self):
+        assert RULE_WEIGHTS["DMARC_FAIL"] == 20
+
+    def test_spf_softfail_weight(self):
+        assert RULE_WEIGHTS["SPF_SOFTFAIL"] == 8
+
+    def test_spf_fail_category(self):
+        assert RULE_CATEGORIES["SPF_FAIL"] == "authentication"
+
+    def test_dkim_fail_category(self):
+        assert RULE_CATEGORIES["DKIM_FAIL"] == "authentication"
+
+    def test_dmarc_fail_category(self):
+        assert RULE_CATEGORIES["DMARC_FAIL"] == "authentication"
+
+    def test_spf_softfail_category(self):
+        assert RULE_CATEGORIES["SPF_SOFTFAIL"] == "authentication"
+
+    def test_spf_fail_contribution(self):
+        """SPF_FAIL (warning) → 15 × 1.5 = 22."""
+        analysis = _make_analysis(_flag("SPF_FAIL", "warning"))
+        result = calculate_threat_score(analysis)
+        contribs = {c["rule_id"]: c["points"] for c in result.rule_contributions}
+        assert contribs["SPF_FAIL"] == 22  # int(15 * 1.5)
+
+    def test_dkim_fail_contribution(self):
+        """DKIM_FAIL (warning) → 15 × 1.5 = 22."""
+        analysis = _make_analysis(_flag("DKIM_FAIL", "warning"))
+        result = calculate_threat_score(analysis)
+        contribs = {c["rule_id"]: c["points"] for c in result.rule_contributions}
+        assert contribs["DKIM_FAIL"] == 22
+
+    def test_dmarc_fail_contribution(self):
+        """DMARC_FAIL (warning) → 20 × 1.5 = 30."""
+        analysis = _make_analysis(_flag("DMARC_FAIL", "warning"))
+        result = calculate_threat_score(analysis)
+        contribs = {c["rule_id"]: c["points"] for c in result.rule_contributions}
+        assert contribs["DMARC_FAIL"] == 30
+
+    def test_spf_softfail_contribution(self):
+        """SPF_SOFTFAIL (info) → 8 × 1.0 = 8."""
+        analysis = _make_analysis(_flag("SPF_SOFTFAIL", "info"))
+        result = calculate_threat_score(analysis)
+        contribs = {c["rule_id"]: c["points"] for c in result.rule_contributions}
+        assert contribs["SPF_SOFTFAIL"] == 8
+
+
+class TestAuthFailureScoringCap:
+    """Authentication category cap of 25 limits combined auth scores."""
+
+    def test_auth_cap_unchanged(self):
+        assert CATEGORY_CAPS["authentication"] == 25
+
+    def test_spf_fail_alone_capped(self):
+        """SPF_FAIL raw = 22, but auth cap = 25 → category = 22 (under cap)."""
+        analysis = _make_analysis(_flag("SPF_FAIL", "warning"))
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 22
+
+    def test_dmarc_fail_alone_capped(self):
+        """DMARC_FAIL raw = 30 → capped at 25."""
+        analysis = _make_analysis(_flag("DMARC_FAIL", "warning"))
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 25
+
+    def test_spf_and_dkim_fail_capped(self):
+        """SPF_FAIL(22) + DKIM_FAIL(22) = 44, capped at 25."""
+        analysis = _make_analysis(
+            _flag("SPF_FAIL", "warning"),
+            _flag("DKIM_FAIL", "warning"),
+        )
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 25
+
+    def test_all_three_fail_capped(self):
+        """SPF+DKIM+DMARC all fail → still capped at 25."""
+        analysis = _make_analysis(
+            _flag("SPF_FAIL", "warning"),
+            _flag("DKIM_FAIL", "warning"),
+            _flag("DMARC_FAIL", "warning"),
+        )
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 25
+
+    def test_softfail_plus_fail_capped(self):
+        """SPF_SOFTFAIL(8) + DMARC_FAIL(30→25) → capped at 25."""
+        analysis = _make_analysis(
+            _flag("SPF_SOFTFAIL", "info"),
+            _flag("DMARC_FAIL", "warning"),
+        )
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 25
+
+    def test_softfail_alone_under_cap(self):
+        """SPF_SOFTFAIL(8) alone → 8, under cap."""
+        analysis = _make_analysis(_flag("SPF_SOFTFAIL", "info"))
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 8
+
+    def test_total_score_respects_cap(self):
+        """All auth failures capped → total score = 25."""
+        analysis = _make_analysis(
+            _flag("SPF_FAIL", "warning"),
+            _flag("DKIM_FAIL", "warning"),
+            _flag("DMARC_FAIL", "warning"),
+        )
+        result = calculate_threat_score(analysis)
+        assert result.score == 25
+
+    def test_auth_plus_identity_combined(self):
+        """Auth cap(25) + identity rule → adds on top."""
+        analysis = _make_analysis(
+            _flag("SPF_FAIL", "warning"),
+            _flag("DKIM_FAIL", "warning"),
+            _flag("REPLY_TO_DOMAIN_MISMATCH", "warning"),
+        )
+        result = calculate_threat_score(analysis)
+        assert result.category_scores["authentication"] == 25
+        assert result.category_scores["identity"] == 22  # 15 * 1.5
+        assert result.score == 47  # 25 + 22
+
+
+class TestExistingScoringUnchanged:
+    """Verify existing scoring behavior is not affected by new rules."""
+
+    def test_missing_auth_weight_unchanged(self):
+        assert RULE_WEIGHTS["MISSING_AUTH_HEADERS"] == 10
+
+    def test_missing_auth_category_unchanged(self):
+        assert RULE_CATEGORIES["MISSING_AUTH_HEADERS"] == "authentication"
+
+    def test_reply_to_mismatch_unchanged(self):
+        assert RULE_WEIGHTS["REPLY_TO_DOMAIN_MISMATCH"] == 15
+        assert RULE_CATEGORIES["REPLY_TO_DOMAIN_MISMATCH"] == "identity"
+
+    def test_return_path_mismatch_unchanged(self):
+        assert RULE_WEIGHTS["RETURN_PATH_DOMAIN_MISMATCH"] == 10
+
+    def test_private_ip_unchanged(self):
+        assert RULE_WEIGHTS["PRIVATE_IP_IN_RECEIVED"] == 5
+        assert RULE_CATEGORIES["PRIVATE_IP_IN_RECEIVED"] == "routing"
+
+    def test_malformed_received_unchanged(self):
+        assert RULE_WEIGHTS["MALFORMED_RECEIVED_HEADER"] == 10
+
+    def test_empty_analysis_still_zero(self):
+        result = calculate_threat_score(ForensicAnalysis())
+        assert result.score == 0
+        assert result.risk_level == "low"
+
+    def test_missing_auth_alone_still_10(self):
+        analysis = _make_analysis(_flag("MISSING_AUTH_HEADERS", "info"))
+        result = calculate_threat_score(analysis)
+        assert result.score == 10
+

@@ -51,6 +51,10 @@ RULE_WEIGHTS: Dict[str, int] = {
     "MISSING_AUTH_HEADERS": 10,
     "PRIVATE_IP_IN_RECEIVED": 5,
     "MALFORMED_RECEIVED_HEADER": 10,
+    "SPF_FAIL": 15,
+    "DKIM_FAIL": 15,
+    "DMARC_FAIL": 20,
+    "SPF_SOFTFAIL": 8,
 }
 
 # Multiplier applied on top of the base weight depending on severity.
@@ -67,6 +71,10 @@ RULE_CATEGORIES: Dict[str, str] = {
     "MISSING_AUTH_HEADERS": "authentication",
     "PRIVATE_IP_IN_RECEIVED": "routing",
     "MALFORMED_RECEIVED_HEADER": "routing",
+    "SPF_FAIL": "authentication",
+    "DKIM_FAIL": "authentication",
+    "DMARC_FAIL": "authentication",
+    "SPF_SOFTFAIL": "authentication",
 }
 
 # Maximum contribution any single category may make to the total score.
