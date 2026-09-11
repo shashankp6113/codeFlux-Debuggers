@@ -7,12 +7,10 @@ metadata for IP addresses.  This module contains:
 - An abstract ``IPGeolocationProvider`` interface that future provider
   implementations (e.g. MaxMind, ip-api) can subclass.
 - A deterministic ``NoOpGeolocationProvider`` for dev/testing.
+- An ``IPWhoProvider`` backed by the free ipwho.is API.
 - A ``get_geolocation_provider()`` factory for provider selection.
 - A helper ``is_public_ip()`` that validates and filters non-public
   addresses using Python's standard-library ``ipaddress`` module.
-
-No network requests are made by this module.  External provider
-integrations will subclass ``IPGeolocationProvider`` in separate modules.
 """
 
 from __future__ import annotations
@@ -225,17 +223,131 @@ class NoOpGeolocationProvider(IPGeolocationProvider):
 
 
 # ---------------------------------------------------------------------------
+# IPWho provider — free, no API key required
+# ---------------------------------------------------------------------------
+
+class IPWhoProvider(IPGeolocationProvider):
+    """Geolocation provider backed by the free ipwho.is API.
+
+    Supports IPv4 and IPv6.  No API key required.
+    Non-public IPs are handled locally without making a network request.
+
+    Only the fields supported by ``GeolocationResult`` are extracted
+    from the upstream response — the full API response is never stored.
+    """
+
+    _BASE_URL = "https://ipwho.is"
+    _TIMEOUT = 10  # seconds
+
+    @property
+    def name(self) -> str:
+        return "ipwho"
+
+    def geolocate(self, ip: str) -> GeolocationResult:
+        # Handle non-public IPs locally — no network call needed
+        reason = _non_public_reason(ip)
+        if reason is not None:
+            return GeolocationResult(
+                ip=ip,
+                provider=self.name,
+                error=reason,
+            )
+
+        try:
+            return self._do_lookup(ip)
+        except Exception as exc:
+            return GeolocationResult(
+                ip=ip,
+                provider=self.name,
+                error=f"IPWho lookup failed: {exc}",
+            )
+
+    def _do_lookup(self, ip: str) -> GeolocationResult:
+        import httpx
+
+        url = f"{self._BASE_URL}/{ip}"
+        resp = httpx.get(url, timeout=self._TIMEOUT)
+
+        if resp.status_code == 429:
+            return GeolocationResult(
+                ip=ip,
+                provider=self.name,
+                error="IPWho rate limit exceeded (HTTP 429)",
+            )
+
+        if resp.status_code != 200:
+            return GeolocationResult(
+                ip=ip,
+                provider=self.name,
+                error=f"IPWho API error (HTTP {resp.status_code})",
+            )
+
+        try:
+            data = resp.json()
+        except Exception:
+            return GeolocationResult(
+                ip=ip,
+                provider=self.name,
+                error="IPWho returned invalid JSON",
+            )
+
+        if not isinstance(data, dict):
+            return GeolocationResult(
+                ip=ip,
+                provider=self.name,
+                error="IPWho returned unexpected response format",
+            )
+
+        # IPWho returns success: false for invalid/non-routable IPs
+        if not data.get("success", False):
+            msg = data.get("message", "Unknown error")
+            return GeolocationResult(
+                ip=ip,
+                provider=self.name,
+                error=f"IPWho: {msg}",
+            )
+
+        # Extract only the fields our GeolocationResult supports
+        asn_val = None
+        connection = data.get("connection")
+        if isinstance(connection, dict):
+            raw_asn = connection.get("asn")
+            if raw_asn is not None:
+                asn_val = str(raw_asn) if not str(raw_asn).startswith("AS") else str(raw_asn)
+            organization = connection.get("org") or connection.get("isp")
+        else:
+            organization = None
+
+        return GeolocationResult(
+            ip=ip,
+            country=data.get("country") or None,
+            country_code=data.get("country_code") or None,
+            city=data.get("city") or None,
+            region=data.get("region") or None,
+            latitude=data.get("latitude"),
+            longitude=data.get("longitude"),
+            asn=asn_val,
+            organization=organization or None,
+            provider=self.name,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Provider factory
 # ---------------------------------------------------------------------------
 
 def get_geolocation_provider() -> IPGeolocationProvider:
     """Return the best available geolocation provider.
 
-    Currently always returns a :class:`NoOpGeolocationProvider`.
-    Future implementations will select a real provider based on
-    configuration (e.g. environment variables for MaxMind or ip-api).
+    Returns :class:`IPWhoProvider` by default.  Set the
+    ``GEOLOCATION_PROVIDER`` environment variable to ``"noop"``
+    to force :class:`NoOpGeolocationProvider` for testing.
     """
-    return NoOpGeolocationProvider()
+    import os
+    choice = os.environ.get("GEOLOCATION_PROVIDER", "").strip().lower()
+    if choice == "noop":
+        return NoOpGeolocationProvider()
+    return IPWhoProvider()
 
 
 # ---------------------------------------------------------------------------

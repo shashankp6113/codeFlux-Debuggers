@@ -1195,7 +1195,7 @@ class TestUploadGeolocation:
     def test_geolocation_has_provider(self):
         r = self._upload()
         geo = r.json()["forensics"]["geolocation"]
-        assert geo["provider"] == "noop"
+        assert geo["provider"] in {"noop", "ipwho"}
 
     def test_geolocation_has_results_list(self):
         r = self._upload()
@@ -1215,7 +1215,7 @@ class TestUploadGeolocation:
         fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).first()
         assert fa is not None
         assert "geolocation" in fa.analysis
-        assert fa.analysis["geolocation"]["provider"] == "noop"
+        assert fa.analysis["geolocation"]["provider"] in {"noop", "ipwho"}
         db.close()
 
     def test_no_ip_email_still_succeeds(self):
@@ -1239,7 +1239,7 @@ Just some plain text with no IP addresses.
         assert r.status_code == 200
         geo = r.json()["forensics"]["geolocation"]
         assert geo is not None
-        assert geo["provider"] == "noop"
+        assert geo["provider"] in {"noop", "ipwho"}
 
     def test_existing_fields_unchanged(self):
         """Adding geolocation did not break existing response fields."""

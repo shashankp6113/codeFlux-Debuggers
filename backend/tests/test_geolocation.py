@@ -1,11 +1,13 @@
 """Comprehensive tests for the IP geolocation layer."""
 
+import json
 import pytest
 
 from geolocation import (
     GeolocationResult,
     IPGeolocationProvider,
     NoOpGeolocationProvider,
+    IPWhoProvider,
     get_geolocation_provider,
     is_public_ip,
     _non_public_reason,
@@ -310,20 +312,26 @@ class TestNoOpNonPublicIP:
 class TestGetGeolocationProvider:
     """get_geolocation_provider() factory."""
 
-    def test_returns_noop(self):
+    def test_returns_ipwho_by_default(self, monkeypatch):
+        monkeypatch.delenv("GEOLOCATION_PROVIDER", raising=False)
+        p = get_geolocation_provider()
+        assert isinstance(p, IPWhoProvider)
+        assert p.name == "ipwho"
+
+    def test_returns_noop_when_configured(self, monkeypatch):
+        monkeypatch.setenv("GEOLOCATION_PROVIDER", "noop")
         p = get_geolocation_provider()
         assert isinstance(p, NoOpGeolocationProvider)
+        assert p.name == "noop"
 
-    def test_returns_provider_interface(self):
+    def test_returns_provider_interface(self, monkeypatch):
+        monkeypatch.delenv("GEOLOCATION_PROVIDER", raising=False)
         p = get_geolocation_provider()
         assert isinstance(p, IPGeolocationProvider)
 
-    def test_name_is_noop(self):
-        p = get_geolocation_provider()
-        assert p.name == "noop"
-
-    def test_is_callable_multiple_times(self):
+    def test_is_callable_multiple_times(self, monkeypatch):
         """Factory can be called repeatedly without error."""
+        monkeypatch.delenv("GEOLOCATION_PROVIDER", raising=False)
         p1 = get_geolocation_provider()
         p2 = get_geolocation_provider()
         assert p1.name == p2.name
@@ -516,3 +524,297 @@ class TestGeolocateIpsService:
         """No explicit provider → NoOp."""
         result = geolocate_ips(_ioc_result([_ioc("ipv4", "8.8.8.8")]))
         assert result.provider == "noop"
+
+
+# ===========================================================================
+# IPWho provider tests
+# ===========================================================================
+
+class _FakeHTTPResponse:
+    """Minimal httpx.Response stand-in."""
+
+    def __init__(self, status_code=200, json_data=None, text=""):
+        self.status_code = status_code
+        self._json = json_data
+        self.text = text or json.dumps(json_data or {})
+
+    def json(self):
+        if self._json is None:
+            raise ValueError("no json")
+        return self._json
+
+
+def _ipwho_success(
+    ip="8.8.8.8",
+    country="United States",
+    country_code="US",
+    city="Mountain View",
+    region="California",
+    latitude=37.386,
+    longitude=-122.0838,
+    asn=15169,
+    org="Google LLC",
+    isp="Google LLC",
+):
+    """Build a mock IPWho success response."""
+    return {
+        "success": True,
+        "ip": ip,
+        "type": "IPv4",
+        "country": country,
+        "country_code": country_code,
+        "city": city,
+        "region": region,
+        "latitude": latitude,
+        "longitude": longitude,
+        "connection": {
+            "asn": asn,
+            "org": org,
+            "isp": isp,
+        },
+        # Extra fields that should NOT appear in our result
+        "continent": "North America",
+        "continent_code": "NA",
+        "timezone": {"id": "America/Los_Angeles"},
+        "flag": {"emoji": "🇺🇸"},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tests: IPWho successful responses
+# ---------------------------------------------------------------------------
+
+class TestIPWhoSuccessIPv4:
+    """Successful IPv4 geolocation."""
+
+    def test_basic_fields(self, monkeypatch):
+        resp = _FakeHTTPResponse(200, _ipwho_success())
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        p = IPWhoProvider()
+        r = p.geolocate("8.8.8.8")
+        assert r.ip == "8.8.8.8"
+        assert r.country == "United States"
+        assert r.country_code == "US"
+        assert r.city == "Mountain View"
+        assert r.region == "California"
+        assert r.provider == "ipwho"
+        assert r.error is None
+
+    def test_coordinates(self, monkeypatch):
+        resp = _FakeHTTPResponse(200, _ipwho_success())
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.latitude == pytest.approx(37.386)
+        assert r.longitude == pytest.approx(-122.0838)
+
+    def test_asn_and_org(self, monkeypatch):
+        resp = _FakeHTTPResponse(200, _ipwho_success())
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.asn == "15169"
+        assert r.organization == "Google LLC"
+
+    def test_no_full_upstream_response(self, monkeypatch):
+        """GeolocationResult should NOT contain the full upstream response."""
+        resp = _FakeHTTPResponse(200, _ipwho_success())
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        # The result is a dataclass, not a dict with raw response
+        assert not hasattr(r, "raw_data")
+        # Ensure extra fields like "continent", "flag" are not present
+        result_str = str(r)
+        assert "continent" not in result_str
+        assert "flag" not in result_str
+
+
+class TestIPWhoSuccessIPv6:
+    """Successful IPv6 geolocation."""
+
+    def test_ipv6_basic(self, monkeypatch):
+        resp = _FakeHTTPResponse(200, _ipwho_success(
+            ip="2001:4860:4860::8888",
+            country="United States",
+            country_code="US",
+            city="Mountain View",
+            region="California",
+        ))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("2001:4860:4860::8888")
+        assert r.ip == "2001:4860:4860::8888"
+        assert r.country == "United States"
+        assert r.error is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: IPWho error handling
+# ---------------------------------------------------------------------------
+
+class TestIPWhoAPIFailures:
+    """HTTP and API-level failures."""
+
+    def test_http_429(self, monkeypatch):
+        resp = _FakeHTTPResponse(429)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.error is not None
+        assert "429" in r.error
+        assert r.provider == "ipwho"
+
+    def test_http_500(self, monkeypatch):
+        resp = _FakeHTTPResponse(500)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.error is not None
+        assert "500" in r.error
+
+    def test_timeout(self, monkeypatch):
+        import httpx
+        def _raise(*a, **kw):
+            raise httpx.ReadTimeout("timed out")
+        monkeypatch.setattr("httpx.get", _raise)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.error is not None
+        assert "timed out" in r.error.lower() or "lookup failed" in r.error.lower()
+
+    def test_connection_error(self, monkeypatch):
+        def _raise(*a, **kw):
+            raise ConnectionError("DNS failure")
+        monkeypatch.setattr("httpx.get", _raise)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.error is not None
+        assert r.provider == "ipwho"
+
+    def test_malformed_json(self, monkeypatch):
+        resp = _FakeHTTPResponse(200, json_data=None, text="not json")
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.error is not None
+        assert "JSON" in r.error or "lookup failed" in r.error
+
+    def test_success_false(self, monkeypatch):
+        """IPWho returns success:false for invalid lookups."""
+        resp = _FakeHTTPResponse(200, {
+            "success": False,
+            "message": "Invalid IP address",
+        })
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.error is not None
+        assert "Invalid IP" in r.error
+
+
+# ---------------------------------------------------------------------------
+# Tests: IPWho missing/null fields
+# ---------------------------------------------------------------------------
+
+class TestIPWhoMissingFields:
+    """Missing or null fields should not crash."""
+
+    def test_missing_connection(self, monkeypatch):
+        data = _ipwho_success()
+        del data["connection"]
+        resp = _FakeHTTPResponse(200, data)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.error is None
+        assert r.asn is None
+        assert r.organization is None
+        assert r.country == "United States"
+
+    def test_null_fields(self, monkeypatch):
+        data = _ipwho_success()
+        data["city"] = None
+        data["region"] = None
+        data["connection"]["asn"] = None
+        data["connection"]["org"] = None
+        data["connection"]["isp"] = None
+        resp = _FakeHTTPResponse(200, data)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.error is None
+        assert r.city is None
+        assert r.region is None
+        assert r.asn is None
+        assert r.organization is None
+
+    def test_empty_string_fields(self, monkeypatch):
+        data = _ipwho_success()
+        data["country"] = ""
+        data["country_code"] = ""
+        resp = _FakeHTTPResponse(200, data)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        r = IPWhoProvider().geolocate("8.8.8.8")
+        assert r.error is None
+        # Empty strings should become None
+        assert r.country is None
+        assert r.country_code is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: IPWho non-public IP handling
+# ---------------------------------------------------------------------------
+
+class TestIPWhoNonPublicIPs:
+    """Non-public IPs handled locally without network call."""
+
+    def test_private_ip(self, monkeypatch):
+        # Should NOT call httpx at all
+        def _should_not_call(*a, **kw):
+            raise AssertionError("httpx should not be called for private IP")
+        monkeypatch.setattr("httpx.get", _should_not_call)
+        r = IPWhoProvider().geolocate("192.168.1.1")
+        assert r.error is not None
+        assert "private" in r.error.lower()
+        assert r.provider == "ipwho"
+
+    def test_loopback(self, monkeypatch):
+        def _should_not_call(*a, **kw):
+            raise AssertionError("should not call")
+        monkeypatch.setattr("httpx.get", _should_not_call)
+        r = IPWhoProvider().geolocate("127.0.0.1")
+        assert r.error is not None
+        assert "loopback" in r.error.lower()
+
+    def test_link_local(self, monkeypatch):
+        def _should_not_call(*a, **kw):
+            raise AssertionError("should not call")
+        monkeypatch.setattr("httpx.get", _should_not_call)
+        r = IPWhoProvider().geolocate("169.254.1.1")
+        assert r.error is not None
+        assert "link-local" in r.error.lower()
+
+    def test_multicast(self, monkeypatch):
+        def _should_not_call(*a, **kw):
+            raise AssertionError("should not call")
+        monkeypatch.setattr("httpx.get", _should_not_call)
+        r = IPWhoProvider().geolocate("224.0.0.1")
+        assert r.error is not None
+        assert "multicast" in r.error.lower()
+
+    def test_invalid_ip(self, monkeypatch):
+        def _should_not_call(*a, **kw):
+            raise AssertionError("should not call")
+        monkeypatch.setattr("httpx.get", _should_not_call)
+        r = IPWhoProvider().geolocate("not-an-ip")
+        assert r.error is not None
+        assert "not a valid" in r.error.lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests: IPWho provider interface
+# ---------------------------------------------------------------------------
+
+class TestIPWhoProviderInterface:
+    """IPWhoProvider conforms to IPGeolocationProvider."""
+
+    def test_is_provider_instance(self):
+        assert isinstance(IPWhoProvider(), IPGeolocationProvider)
+
+    def test_name(self):
+        assert IPWhoProvider().name == "ipwho"
+
+    def test_supports_ipv4(self):
+        assert IPWhoProvider().supports("8.8.8.8")
+
+    def test_supports_ipv6(self):
+        assert IPWhoProvider().supports("2001:4860:4860::8888")
