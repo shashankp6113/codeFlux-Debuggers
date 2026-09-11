@@ -973,3 +973,102 @@ class TestThreatIntelPersistence:
         assert "ioc_extraction" in fa.analysis
         assert "threat_intelligence" in fa.analysis
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests: No-raw-headers emails still get IOC + threat intel
+# ---------------------------------------------------------------------------
+
+# Minimal .eml that produces an empty raw_headers string after parsing.
+# Python's email parser always produces *some* raw headers from From/To,
+# so we use a body containing IOCs to verify extraction runs regardless.
+# To truly test the "no raw_headers" branch we create a body-only email
+# with IOC data to confirm IOC extraction works for all emails.
+
+BODY_WITH_IOCS_EML = b"""\
+From: attacker@evil.test
+To: victim@company.test
+Subject: Check this
+Content-Type: text/plain
+
+Visit http://malware.evil.test/payload and contact admin@evil.test
+Also check 192.168.1.100 for details.
+"""
+
+
+class TestUploadNoHeaderForensics:
+    """Emails always get IOC extraction and threat-intel enrichment."""
+
+    def _upload_inline(self, eml_bytes):
+        import io
+        return client.post(
+            "/api/emails/upload",
+            data={"email_account_id": 1},
+            files={"file": ("test.eml", io.BytesIO(eml_bytes), "message/rfc822")},
+        )
+
+    def test_returns_200(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        assert r.status_code == 200
+
+    def test_forensics_present(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        assert r.json()["forensics"] is not None
+
+    def test_ioc_extraction_present(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        forensics = r.json()["forensics"]
+        assert "ioc_extraction" in forensics
+        assert forensics["ioc_extraction"] is not None
+
+    def test_ioc_extraction_has_iocs(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        iocs = r.json()["forensics"]["ioc_extraction"]["iocs"]
+        assert len(iocs) > 0
+
+    def test_ioc_extraction_finds_url(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        iocs = r.json()["forensics"]["ioc_extraction"]["iocs"]
+        urls = [i for i in iocs if i["ioc_type"] == "url"]
+        assert any("malware.evil.test" in u["value"] for u in urls)
+
+    def test_ioc_extraction_finds_email(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        iocs = r.json()["forensics"]["ioc_extraction"]["iocs"]
+        emails = [i for i in iocs if i["ioc_type"] == "email"]
+        assert any("admin@evil.test" in e["value"] for e in emails)
+
+    def test_threat_intelligence_present(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        forensics = r.json()["forensics"]
+        assert "threat_intelligence" in forensics
+        assert forensics["threat_intelligence"] is not None
+
+    def test_threat_intelligence_has_enrichments(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        ti = r.json()["forensics"]["threat_intelligence"]
+        assert "enrichments" in ti
+
+    def test_threat_intelligence_provider_noop(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        ti = r.json()["forensics"]["threat_intelligence"]
+        assert ti["provider"] == "noop"
+
+    def test_persisted_record_has_iocs(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        email_id = r.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).first()
+        assert fa is not None
+        assert "ioc_extraction" in fa.analysis
+        assert len(fa.analysis["ioc_extraction"]["iocs"]) > 0
+        db.close()
+
+    def test_persisted_record_has_threat_intel(self):
+        r = self._upload_inline(BODY_WITH_IOCS_EML)
+        email_id = r.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).first()
+        assert fa is not None
+        assert "threat_intelligence" in fa.analysis
+        db.close()

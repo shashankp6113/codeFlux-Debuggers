@@ -83,8 +83,8 @@ async def upload_email(
     db.commit()
     db.refresh(db_email)
 
-    # Run forensic analysis on the raw headers
-    forensics_result = None
+    # Run forensic analysis on the raw headers (if available)
+    analysis_dict: dict = {}
     if parsed.raw_headers:
         analysis = analyze_headers(parsed.raw_headers)
         analysis_dict = asdict(analysis)
@@ -93,25 +93,25 @@ async def upload_email(
         threat_score = calculate_threat_score(analysis)
         analysis_dict["threat_score"] = asdict(threat_score)
 
-        # Extract IOCs from the full parsed email
-        ioc_result = extract_iocs(parsed)
-        analysis_dict["ioc_extraction"] = asdict(ioc_result)
+    # Extract IOCs from the full parsed email (always)
+    ioc_result = extract_iocs(parsed)
+    analysis_dict["ioc_extraction"] = asdict(ioc_result)
 
-        # Enrich IOCs with threat intelligence (NoOpProvider by default)
-        ti_result = enrich_iocs(ioc_result)
-        analysis_dict["threat_intelligence"] = asdict(ti_result)
+    # Enrich IOCs with threat intelligence (always, NoOpProvider by default)
+    ti_result = enrich_iocs(ioc_result)
+    analysis_dict["threat_intelligence"] = asdict(ti_result)
 
-        # Persist forensic analysis (including threat_score, IOCs, and
-        # threat intelligence) to database
-        db_forensic = ForensicAnalysisRecord(
-            email_id=db_email.id,
-            analysis=analysis_dict,
-        )
-        db.add(db_forensic)
-        db.commit()
-        db.refresh(db_forensic)
+    # Persist forensic analysis (including threat_score, IOCs, and
+    # threat intelligence) to database
+    db_forensic = ForensicAnalysisRecord(
+        email_id=db_email.id,
+        analysis=analysis_dict,
+    )
+    db.add(db_forensic)
+    db.commit()
+    db.refresh(db_forensic)
 
-        forensics_result = ForensicAnalysisSchema.model_validate(analysis_dict)
+    forensics_result = ForensicAnalysisSchema.model_validate(analysis_dict)
 
     # Build response combining ORM attributes with forensic analysis
     response = EmailResponse.model_validate(db_email)
