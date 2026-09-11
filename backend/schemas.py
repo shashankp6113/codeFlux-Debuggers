@@ -31,6 +31,12 @@ class AuthenticationHeadersSchema(BaseModel):
     arc_seal: Optional[str] = None
     arc_message_signature: Optional[str] = None
 
+    # Structured verdicts parsed from raw headers
+    spf_verdict: Optional[str] = None
+    dkim_verdict: Optional[str] = None
+    dmarc_verdict: Optional[str] = None
+    received_spf_verdict: Optional[str] = None
+
 
 class IdentityHeadersSchema(BaseModel):
     """Identity-related headers extracted verbatim."""

@@ -33,16 +33,45 @@ class ReceivedHop:
     raw: str = ""
 
 
+# Controlled set of valid authentication verdict values.
+# Using a tuple constant so it can be checked at runtime and referenced
+# by typing.Literal in type hints.
+VALID_VERDICTS = (
+    "pass", "fail", "softfail", "neutral",
+    "none", "temperror", "permerror",
+)
+
+AuthVerdict = str  # One of VALID_VERDICTS or None; see _normalise_verdict()
+
+
+def _normalise_verdict(raw: str) -> Optional[str]:
+    """Normalise a raw verdict string to a canonical value.
+
+    Returns one of VALID_VERDICTS if recognised, otherwise None.
+    """
+    cleaned = raw.strip().lower()
+    if cleaned in VALID_VERDICTS:
+        return cleaned
+    return None
+
+
 @dataclass
 class AuthenticationHeaders:
-    """Authentication-related headers extracted verbatim."""
+    """Authentication-related headers — raw values plus structured verdicts."""
 
+    # Raw header values (preserved verbatim, unchanged from before)
     authentication_results: Optional[str] = None
     received_spf: Optional[str] = None
     dkim_signature: Optional[str] = None
     arc_authentication_results: Optional[str] = None
     arc_seal: Optional[str] = None
     arc_message_signature: Optional[str] = None
+
+    # Structured verdicts parsed from the raw headers above
+    spf_verdict: Optional[str] = None      # from Authentication-Results
+    dkim_verdict: Optional[str] = None     # from Authentication-Results
+    dmarc_verdict: Optional[str] = None    # from Authentication-Results
+    received_spf_verdict: Optional[str] = None  # from Received-SPF header
 
 
 @dataclass
@@ -345,6 +374,78 @@ def _detect_inconsistencies(
 
 
 # ---------------------------------------------------------------------------
+# Authentication verdict parsing
+# ---------------------------------------------------------------------------
+
+# Regex to extract method=verdict pairs from Authentication-Results.
+# Matches patterns like "spf=pass", "dkim=fail", "dmarc=none" etc.
+# The verdict portion may be followed by a space, parenthesis, semicolon, or EOL.
+_RE_AUTH_RESULT_VERDICT = re.compile(
+    r"\b(spf|dkim|dmarc)\s*=\s*(\S+)", re.IGNORECASE
+)
+
+# Regex to extract the verdict from a Received-SPF header value.
+# The verdict is the first token, e.g. "pass (details...)" or "fail"
+_RE_RECEIVED_SPF_VERDICT = re.compile(
+    r"^\s*(\S+)", re.IGNORECASE
+)
+
+
+def _parse_authentication_results(header_value: str) -> dict:
+    """Parse an Authentication-Results header into method→verdict dict.
+
+    Args:
+        header_value: The raw value of the Authentication-Results header.
+
+    Returns:
+        A dict like {"spf": "pass", "dkim": "fail", "dmarc": "pass"}.
+        Only includes methods whose verdicts are valid/recognised.
+    """
+    verdicts = {}
+    for match in _RE_AUTH_RESULT_VERDICT.finditer(header_value):
+        method = match.group(1).lower()
+        raw_verdict = match.group(2).split("(")[0].rstrip(";,)")
+        normalised = _normalise_verdict(raw_verdict)
+        if normalised is not None and method not in verdicts:
+            verdicts[method] = normalised
+    return verdicts
+
+
+def _parse_received_spf_verdict(header_value: str) -> Optional[str]:
+    """Parse the verdict from a Received-SPF header value.
+
+    Args:
+        header_value: The raw value of the Received-SPF header.
+
+    Returns:
+        A normalised verdict string, or None if unparseable.
+    """
+    m = _RE_RECEIVED_SPF_VERDICT.match(header_value)
+    if m:
+        return _normalise_verdict(m.group(1))
+    return None
+
+
+def _populate_verdicts(auth: AuthenticationHeaders) -> None:
+    """Parse structured verdicts from raw authentication headers.
+
+    Mutates the auth dataclass in place, setting the verdict fields.
+    """
+    # Parse Authentication-Results
+    if auth.authentication_results:
+        verdicts = _parse_authentication_results(auth.authentication_results)
+        auth.spf_verdict = verdicts.get("spf")
+        auth.dkim_verdict = verdicts.get("dkim")
+        auth.dmarc_verdict = verdicts.get("dmarc")
+
+    # Parse Received-SPF
+    if auth.received_spf:
+        auth.received_spf_verdict = _parse_received_spf_verdict(
+            auth.received_spf
+        )
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -398,6 +499,9 @@ def analyze_headers(raw_headers: str) -> ForensicAnalysis:
             identity.to_header = value
         elif lower == "message-id" and identity.message_id is None:
             identity.message_id = value
+
+    # --- Structured authentication verdicts ---
+    _populate_verdicts(auth)
 
     # --- Detection rules ---
     flags = _detect_inconsistencies(identity, auth, hops)

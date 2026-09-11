@@ -1,4 +1,4 @@
-from sqlalchemy import Column,Integer,String,Text,DateTime,ForeignKey
+from sqlalchemy import Column,Integer,String,Text,DateTime,ForeignKey,JSON
 from sqlalchemy.orm import declarative_base,relationship
 from datetime import datetime
 
@@ -47,3 +47,22 @@ class Email(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
 
     email_account=relationship("EmailAccount",back_populates="emails")
+    forensic_analysis=relationship(
+        "ForensicAnalysis",back_populates="email",uselist=False
+    )
+
+
+class ForensicAnalysis(Base):
+    """Stores the result of deterministic header forensic analysis for an email.
+
+    One-to-one with Email. The `analysis` column holds the complete structured
+    forensic result as JSON (JSONB on PostgreSQL).
+    """
+    __tablename__="forensic_analyses"
+
+    id=Column(Integer,primary_key=True,index=True)
+    email_id=Column(Integer,ForeignKey("emails.id"),nullable=False,unique=True)
+    analysis=Column(JSON,nullable=False)
+    created_at=Column(DateTime,default=datetime.utcnow)
+
+    email=relationship("Email",back_populates="forensic_analysis")

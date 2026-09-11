@@ -22,7 +22,7 @@ os.environ.setdefault("POSTGRES_HOST", "x")
 os.environ.setdefault("POSTGRES_PORT", "5432")
 os.environ.setdefault("POSTGRES_DB", "x")
 
-from models import Base, User, EmailAccount, Email  # noqa: F401 – import all models
+from models import Base, User, EmailAccount, Email, ForensicAnalysis  # noqa: F401
 from database import get_db
 from main import app
 
@@ -160,3 +160,142 @@ class TestUploadExistingEndpoints:
         resp = client.get("/")
         assert resp.status_code == 200
         assert resp.json()["message"] == "MailForensics AI Backend is running"
+
+
+# ---------------------------------------------------------------------------
+# Tests: ForensicAnalysis model persistence
+# ---------------------------------------------------------------------------
+
+class TestForensicAnalysisModel:
+    """Tests for the ForensicAnalysis SQLAlchemy model (one-to-one with Email)."""
+
+    def _seed_email(self, db):
+        """Create and return a minimal Email for testing."""
+        email = Email(
+            email_account_id=1,
+            sender="a@test.local",
+            recipient="b@test.local",
+        )
+        db.add(email)
+        db.commit()
+        db.refresh(email)
+        return email
+
+    def test_create_forensic_analysis(self):
+        db = TestSession()
+        email = self._seed_email(db)
+        fa = ForensicAnalysis(
+            email_id=email.id,
+            analysis={"received_hops": [], "flags": []},
+        )
+        db.add(fa)
+        db.commit()
+        db.refresh(fa)
+        assert fa.id is not None
+        assert fa.email_id == email.id
+        assert fa.created_at is not None
+        db.close()
+
+    def test_analysis_json_roundtrip(self):
+        """Verify JSONB data survives a write-read cycle."""
+        db = TestSession()
+        email = self._seed_email(db)
+        payload = {
+            "received_hops": [{"hop_number": 1, "source_host": "mx.test"}],
+            "authentication": {"dkim_signature": "v=1; a=rsa-sha256"},
+            "identity": {"from_header": "sender@test.local"},
+            "flags": [{"rule_id": "TEST_RULE", "severity": "info",
+                        "description": "test", "evidence": "test"}],
+        }
+        fa = ForensicAnalysis(email_id=email.id, analysis=payload)
+        db.add(fa)
+        db.commit()
+
+        loaded = db.query(ForensicAnalysis).filter_by(email_id=email.id).one()
+        assert loaded.analysis["received_hops"][0]["source_host"] == "mx.test"
+        assert loaded.analysis["flags"][0]["rule_id"] == "TEST_RULE"
+        assert loaded.analysis["authentication"]["dkim_signature"] == "v=1; a=rsa-sha256"
+        db.close()
+
+    def test_one_to_one_relationship_from_email(self):
+        db = TestSession()
+        email = self._seed_email(db)
+        fa = ForensicAnalysis(
+            email_id=email.id,
+            analysis={"test": True},
+        )
+        db.add(fa)
+        db.commit()
+        db.refresh(email)
+        assert email.forensic_analysis is not None
+        assert email.forensic_analysis.id == fa.id
+        db.close()
+
+    def test_one_to_one_relationship_from_forensic(self):
+        db = TestSession()
+        email = self._seed_email(db)
+        fa = ForensicAnalysis(
+            email_id=email.id,
+            analysis={"test": True},
+        )
+        db.add(fa)
+        db.commit()
+        db.refresh(fa)
+        assert fa.email is not None
+        assert fa.email.id == email.id
+        db.close()
+
+    def test_email_without_forensic_is_valid(self):
+        """Emails created without forensic analysis should work fine."""
+        db = TestSession()
+        email = self._seed_email(db)
+        db.refresh(email)
+        assert email.forensic_analysis is None
+        db.close()
+
+
+class TestUploadPersistsForensic:
+    """Verify that the upload endpoint persists a ForensicAnalysis record."""
+
+    def _upload(self):
+        with open(SAMPLE_EML, "rb") as f:
+            return client.post(
+                "/api/emails/upload",
+                files={"file": ("sample.eml", f, "message/rfc822")},
+                data={"email_account_id": "1"},
+            )
+
+    def test_upload_creates_forensic_record(self):
+        self._upload()
+        db = TestSession()
+        count = db.query(ForensicAnalysis).count()
+        assert count >= 1
+        db.close()
+
+    def test_forensic_record_linked_to_email(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).first()
+        assert fa is not None
+        assert fa.analysis is not None
+        db.close()
+
+    def test_forensic_record_has_received_hops(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        assert "received_hops" in fa.analysis
+        assert len(fa.analysis["received_hops"]) == 2
+        db.close()
+
+    def test_forensic_record_has_flags(self):
+        resp = self._upload()
+        email_id = resp.json()["id"]
+        db = TestSession()
+        fa = db.query(ForensicAnalysis).filter_by(email_id=email_id).one()
+        assert "flags" in fa.analysis
+        rule_ids = [f["rule_id"] for f in fa.analysis["flags"]]
+        assert "MISSING_AUTH_HEADERS" in rule_ids
+        db.close()

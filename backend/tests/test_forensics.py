@@ -14,6 +14,11 @@ from forensics import (
     _extract_domain,
     _parse_header_block,
     _parse_received_hop,
+    _normalise_verdict,
+    _parse_authentication_results,
+    _parse_received_spf_verdict,
+    _populate_verdicts,
+    VALID_VERDICTS,
 )
 
 
@@ -131,6 +136,386 @@ From: sender@example.test
 To: recipient@dest.test
 Message-ID: <msg009@example.test>
 Subject: Documentation IP test"""
+
+# Headers with various Authentication-Results configurations
+HEADERS_AUTH_SPF_PASS = """\
+Authentication-Results: mx.example.test; spf=pass (sender verified) smtp.mailfrom=sender@example.test
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg010@example.test>
+Subject: SPF pass test"""
+
+HEADERS_AUTH_SPF_FAIL = """\
+Authentication-Results: mx.example.test; spf=fail (sender not authorized) smtp.mailfrom=sender@example.test
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg011@example.test>
+Subject: SPF fail test"""
+
+HEADERS_AUTH_DKIM_PASS = """\
+Authentication-Results: mx.example.test; dkim=pass header.d=example.test header.s=sel1
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg012@example.test>
+Subject: DKIM pass test"""
+
+HEADERS_AUTH_DKIM_FAIL = """\
+Authentication-Results: mx.example.test; dkim=fail (bad signature) header.d=example.test
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg013@example.test>
+Subject: DKIM fail test"""
+
+HEADERS_AUTH_DMARC_PASS = """\
+Authentication-Results: mx.example.test; dmarc=pass (p=REJECT) header.from=example.test
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg014@example.test>
+Subject: DMARC pass test"""
+
+HEADERS_AUTH_DMARC_FAIL = """\
+Authentication-Results: mx.example.test; dmarc=fail (p=REJECT) header.from=example.test
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg015@example.test>
+Subject: DMARC fail test"""
+
+HEADERS_AUTH_MULTIPLE = """\
+Authentication-Results: mx.example.test;\
+ spf=pass smtp.mailfrom=sender@example.test;\
+ dkim=pass header.d=example.test;\
+ dmarc=pass header.from=example.test
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg016@example.test>
+Subject: Multiple auth methods"""
+
+HEADERS_RECEIVED_SPF_PASS = """\
+Received-SPF: pass (mx.example.test: domain of sender@example.test designates 1.2.3.4 as permitted sender) client-ip=1.2.3.4
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg017@example.test>
+Subject: Received-SPF pass test"""
+
+HEADERS_RECEIVED_SPF_FAIL = """\
+Received-SPF: fail (mx.example.test: domain of sender@example.test does not designate 5.6.7.8 as permitted sender) client-ip=5.6.7.8
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg018@example.test>
+Subject: Received-SPF fail test"""
+
+HEADERS_RECEIVED_SPF_SOFTFAIL = """\
+Received-SPF: softfail (mx.example.test: transitioning domain) client-ip=5.6.7.8
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg019@example.test>
+Subject: Received-SPF softfail test"""
+
+HEADERS_AUTH_MALFORMED = """\
+Authentication-Results: mx.example.test; spf=GIBBERISH; dkim=!!invalid
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg020@example.test>
+Subject: Malformed auth test"""
+
+HEADERS_AUTH_TEMPERROR = """\
+Authentication-Results: mx.example.test; spf=temperror; dkim=permerror; dmarc=none
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg021@example.test>
+Subject: Temperror test"""
+
+HEADERS_AUTH_AND_RECEIVED_SPF = """\
+Authentication-Results: mx.example.test; spf=pass; dkim=fail; dmarc=none
+Received-SPF: softfail (transitioning) client-ip=1.2.3.4
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <msg022@example.test>
+Subject: Both auth headers"""
+
+
+# ---------------------------------------------------------------------------
+# Tests: Authentication verdict parsing helpers
+# ---------------------------------------------------------------------------
+
+class TestNormaliseVerdict:
+    """Tests for _normalise_verdict()."""
+
+    def test_pass(self):
+        assert _normalise_verdict("pass") == "pass"
+
+    def test_fail(self):
+        assert _normalise_verdict("fail") == "fail"
+
+    def test_softfail(self):
+        assert _normalise_verdict("softfail") == "softfail"
+
+    def test_neutral(self):
+        assert _normalise_verdict("neutral") == "neutral"
+
+    def test_none(self):
+        assert _normalise_verdict("none") == "none"
+
+    def test_temperror(self):
+        assert _normalise_verdict("temperror") == "temperror"
+
+    def test_permerror(self):
+        assert _normalise_verdict("permerror") == "permerror"
+
+    def test_case_insensitive(self):
+        assert _normalise_verdict("Pass") == "pass"
+        assert _normalise_verdict("FAIL") == "fail"
+        assert _normalise_verdict("SoftFail") == "softfail"
+
+    def test_whitespace_stripped(self):
+        assert _normalise_verdict("  pass  ") == "pass"
+
+    def test_unrecognised_returns_none(self):
+        assert _normalise_verdict("GIBBERISH") is None
+
+    def test_empty_returns_none(self):
+        assert _normalise_verdict("") is None
+
+    def test_invalid_symbol_returns_none(self):
+        assert _normalise_verdict("!!invalid") is None
+
+
+class TestParseAuthenticationResults:
+    """Tests for _parse_authentication_results()."""
+
+    def test_spf_pass(self):
+        hdr = "mx.test; spf=pass smtp.mailfrom=a@b.test"
+        assert _parse_authentication_results(hdr) == {"spf": "pass"}
+
+    def test_spf_fail(self):
+        hdr = "mx.test; spf=fail (bad sender)"
+        assert _parse_authentication_results(hdr) == {"spf": "fail"}
+
+    def test_dkim_pass(self):
+        hdr = "mx.test; dkim=pass header.d=example.test"
+        assert _parse_authentication_results(hdr) == {"dkim": "pass"}
+
+    def test_dkim_fail(self):
+        hdr = "mx.test; dkim=fail (bad sig)"
+        assert _parse_authentication_results(hdr) == {"dkim": "fail"}
+
+    def test_dmarc_pass(self):
+        hdr = "mx.test; dmarc=pass (p=REJECT) header.from=example.test"
+        assert _parse_authentication_results(hdr) == {"dmarc": "pass"}
+
+    def test_dmarc_fail(self):
+        hdr = "mx.test; dmarc=fail (p=REJECT)"
+        assert _parse_authentication_results(hdr) == {"dmarc": "fail"}
+
+    def test_multiple_methods(self):
+        hdr = "mx.test; spf=pass; dkim=pass; dmarc=pass"
+        result = _parse_authentication_results(hdr)
+        assert result == {"spf": "pass", "dkim": "pass", "dmarc": "pass"}
+
+    def test_mixed_verdicts(self):
+        hdr = "mx.test; spf=pass; dkim=fail; dmarc=none"
+        result = _parse_authentication_results(hdr)
+        assert result["spf"] == "pass"
+        assert result["dkim"] == "fail"
+        assert result["dmarc"] == "none"
+
+    def test_temperror_and_permerror(self):
+        hdr = "mx.test; spf=temperror; dkim=permerror; dmarc=none"
+        result = _parse_authentication_results(hdr)
+        assert result["spf"] == "temperror"
+        assert result["dkim"] == "permerror"
+        assert result["dmarc"] == "none"
+
+    def test_softfail(self):
+        hdr = "mx.test; spf=softfail"
+        assert _parse_authentication_results(hdr) == {"spf": "softfail"}
+
+    def test_neutral(self):
+        hdr = "mx.test; spf=neutral"
+        assert _parse_authentication_results(hdr) == {"spf": "neutral"}
+
+    def test_unrecognised_verdict_excluded(self):
+        hdr = "mx.test; spf=GIBBERISH; dkim=pass"
+        result = _parse_authentication_results(hdr)
+        assert "spf" not in result
+        assert result["dkim"] == "pass"
+
+    def test_no_methods_returns_empty(self):
+        hdr = "mx.test; auth=unknown"
+        assert _parse_authentication_results(hdr) == {}
+
+    def test_empty_string(self):
+        assert _parse_authentication_results("") == {}
+
+    def test_case_insensitive_method(self):
+        hdr = "mx.test; SPF=pass; DKIM=fail"
+        result = _parse_authentication_results(hdr)
+        assert result["spf"] == "pass"
+        assert result["dkim"] == "fail"
+
+    def test_verdict_with_trailing_semicolon(self):
+        hdr = "mx.test; spf=pass;"
+        assert _parse_authentication_results(hdr) == {"spf": "pass"}
+
+    def test_verdict_with_trailing_paren(self):
+        hdr = "mx.test; dmarc=pass(p=REJECT)"
+        assert _parse_authentication_results(hdr) == {"dmarc": "pass"}
+
+    def test_first_occurrence_wins(self):
+        """If a method appears multiple times, keep the first verdict."""
+        hdr = "mx.test; spf=pass; spf=fail"
+        assert _parse_authentication_results(hdr) == {"spf": "pass"}
+
+
+class TestParseReceivedSpfVerdict:
+    """Tests for _parse_received_spf_verdict()."""
+
+    def test_pass(self):
+        assert _parse_received_spf_verdict("pass (details)") == "pass"
+
+    def test_fail(self):
+        assert _parse_received_spf_verdict("fail (bad sender)") == "fail"
+
+    def test_softfail(self):
+        assert _parse_received_spf_verdict("softfail (transitioning)") == "softfail"
+
+    def test_neutral(self):
+        assert _parse_received_spf_verdict("neutral (no policy)") == "neutral"
+
+    def test_none(self):
+        assert _parse_received_spf_verdict("none") == "none"
+
+    def test_temperror(self):
+        assert _parse_received_spf_verdict("temperror (dns timeout)") == "temperror"
+
+    def test_permerror(self):
+        assert _parse_received_spf_verdict("permerror (bad record)") == "permerror"
+
+    def test_unrecognised_returns_none(self):
+        assert _parse_received_spf_verdict("GIBBERISH (stuff)") is None
+
+    def test_empty_returns_none(self):
+        assert _parse_received_spf_verdict("") is None
+
+    def test_case_insensitive(self):
+        assert _parse_received_spf_verdict("Pass (ok)") == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Tests: End-to-end auth verdict integration via analyze_headers
+# ---------------------------------------------------------------------------
+
+class TestAuthVerdictIntegration:
+    """Verify that analyze_headers() populates structured verdicts correctly."""
+
+    def test_spf_pass_verdict(self):
+        result = analyze_headers(HEADERS_AUTH_SPF_PASS)
+        assert result.authentication.spf_verdict == "pass"
+
+    def test_spf_fail_verdict(self):
+        result = analyze_headers(HEADERS_AUTH_SPF_FAIL)
+        assert result.authentication.spf_verdict == "fail"
+
+    def test_dkim_pass_verdict(self):
+        result = analyze_headers(HEADERS_AUTH_DKIM_PASS)
+        assert result.authentication.dkim_verdict == "pass"
+
+    def test_dkim_fail_verdict(self):
+        result = analyze_headers(HEADERS_AUTH_DKIM_FAIL)
+        assert result.authentication.dkim_verdict == "fail"
+
+    def test_dmarc_pass_verdict(self):
+        result = analyze_headers(HEADERS_AUTH_DMARC_PASS)
+        assert result.authentication.dmarc_verdict == "pass"
+
+    def test_dmarc_fail_verdict(self):
+        result = analyze_headers(HEADERS_AUTH_DMARC_FAIL)
+        assert result.authentication.dmarc_verdict == "fail"
+
+    def test_multiple_verdicts(self):
+        result = analyze_headers(HEADERS_AUTH_MULTIPLE)
+        assert result.authentication.spf_verdict == "pass"
+        assert result.authentication.dkim_verdict == "pass"
+        assert result.authentication.dmarc_verdict == "pass"
+
+    def test_received_spf_pass(self):
+        result = analyze_headers(HEADERS_RECEIVED_SPF_PASS)
+        assert result.authentication.received_spf_verdict == "pass"
+
+    def test_received_spf_fail(self):
+        result = analyze_headers(HEADERS_RECEIVED_SPF_FAIL)
+        assert result.authentication.received_spf_verdict == "fail"
+
+    def test_received_spf_softfail(self):
+        result = analyze_headers(HEADERS_RECEIVED_SPF_SOFTFAIL)
+        assert result.authentication.received_spf_verdict == "softfail"
+
+    def test_both_auth_and_received_spf(self):
+        result = analyze_headers(HEADERS_AUTH_AND_RECEIVED_SPF)
+        assert result.authentication.spf_verdict == "pass"
+        assert result.authentication.dkim_verdict == "fail"
+        assert result.authentication.dmarc_verdict == "none"
+        assert result.authentication.received_spf_verdict == "softfail"
+
+    def test_temperror_and_permerror(self):
+        result = analyze_headers(HEADERS_AUTH_TEMPERROR)
+        assert result.authentication.spf_verdict == "temperror"
+        assert result.authentication.dkim_verdict == "permerror"
+        assert result.authentication.dmarc_verdict == "none"
+
+    def test_malformed_verdicts_are_none(self):
+        result = analyze_headers(HEADERS_AUTH_MALFORMED)
+        assert result.authentication.spf_verdict is None
+        assert result.authentication.dkim_verdict is None
+
+    def test_no_auth_headers_verdicts_are_none(self):
+        result = analyze_headers(HEADERS_NO_AUTH)
+        assert result.authentication.spf_verdict is None
+        assert result.authentication.dkim_verdict is None
+        assert result.authentication.dmarc_verdict is None
+        assert result.authentication.received_spf_verdict is None
+
+    def test_missing_auth_still_preserves_raw(self):
+        result = analyze_headers(HEADERS_AUTH_SPF_PASS)
+        assert result.authentication.authentication_results is not None
+        assert "spf=pass" in result.authentication.authentication_results
+
+    def test_raw_received_spf_preserved(self):
+        result = analyze_headers(HEADERS_RECEIVED_SPF_PASS)
+        assert result.authentication.received_spf is not None
+        assert "pass" in result.authentication.received_spf
+
+    def test_sample_eml_verdicts_none(self, sample_eml_headers):
+        """sample.eml has no auth headers, so all verdicts should be None."""
+        result = analyze_headers(sample_eml_headers)
+        assert result.authentication.spf_verdict is None
+        assert result.authentication.dkim_verdict is None
+        assert result.authentication.dmarc_verdict is None
+        assert result.authentication.received_spf_verdict is None
+
+    def test_existing_auth_verdicts_populated(self):
+        """HEADERS_WITH_AUTH has auth headers — verdicts should be populated."""
+        result = analyze_headers(HEADERS_WITH_AUTH)
+        assert result.authentication.spf_verdict == "pass"
+        assert result.authentication.dkim_verdict == "pass"
+        assert result.authentication.received_spf_verdict == "pass"
+
+    def test_existing_auth_raw_still_present(self):
+        """Raw header values must still be populated alongside verdicts."""
+        result = analyze_headers(HEADERS_WITH_AUTH)
+        assert result.authentication.authentication_results is not None
+        assert result.authentication.received_spf is not None
+        assert result.authentication.dkim_signature is not None
+
+    def test_empty_headers_verdicts_none(self):
+        result = analyze_headers(HEADERS_EMPTY)
+        assert result.authentication.spf_verdict is None
+        assert result.authentication.dkim_verdict is None
+
+    def test_minimal_headers_verdicts_none(self):
+        result = analyze_headers(HEADERS_MINIMAL)
+        assert result.authentication.spf_verdict is None
+
 
 # ---------------------------------------------------------------------------
 # Tests: sample.eml fixture

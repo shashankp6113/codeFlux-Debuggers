@@ -4,7 +4,7 @@ from fastapi import FastAPI, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db
-from models import Email
+from models import Email, ForensicAnalysis as ForensicAnalysisRecord
 from schemas import EmailResponse, ForensicAnalysisSchema
 from email_parser import parse_eml
 from forensics import analyze_headers
@@ -84,7 +84,18 @@ async def upload_email(
     forensics_result = None
     if parsed.raw_headers:
         analysis = analyze_headers(parsed.raw_headers)
-        forensics_result = ForensicAnalysisSchema.model_validate(asdict(analysis))
+        analysis_dict = asdict(analysis)
+
+        # Persist forensic analysis to database
+        db_forensic = ForensicAnalysisRecord(
+            email_id=db_email.id,
+            analysis=analysis_dict,
+        )
+        db.add(db_forensic)
+        db.commit()
+        db.refresh(db_forensic)
+
+        forensics_result = ForensicAnalysisSchema.model_validate(analysis_dict)
 
     # Build response combining ORM attributes with forensic analysis
     response = EmailResponse.model_validate(db_email)
