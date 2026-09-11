@@ -784,3 +784,406 @@ class TestMixedIOCTypes:
         enrich_iocs(iocs, provider)
         # 10.0.0.1 deduplicated, so only 2 calls
         assert len(provider.calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# VirusTotal provider tests
+# ---------------------------------------------------------------------------
+
+from threat_intel import VirusTotalProvider
+
+
+def _vt_response(
+    malicious=0, suspicious=0, harmless=0, undetected=0,
+    country=None, asn=None, as_owner=None,
+    extra_attrs=None,
+):
+    """Build a mock VirusTotal API v3 JSON response dict."""
+    attrs = {
+        "last_analysis_stats": {
+            "malicious": malicious,
+            "suspicious": suspicious,
+            "harmless": harmless,
+            "undetected": undetected,
+        },
+    }
+    if country is not None:
+        attrs["country"] = country
+    if asn is not None:
+        attrs["asn"] = asn
+    if as_owner is not None:
+        attrs["as_owner"] = as_owner
+    if extra_attrs:
+        attrs.update(extra_attrs)
+    return {"data": {"attributes": attrs}}
+
+
+class _FakeResponse:
+    """Minimal httpx.Response stand-in."""
+
+    def __init__(self, status_code=200, json_data=None):
+        self.status_code = status_code
+        self._json = json_data or {}
+
+    def json(self):
+        return self._json
+
+    def raise_for_status(self):
+        if self.status_code >= 400 and self.status_code != 429:
+            import httpx
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}",
+                request=httpx.Request("GET", "https://fake"),
+                response=self,
+            )
+
+
+def _make_vt_provider(monkeypatch, api_key="test-key-123"):
+    """Create a VirusTotalProvider with a patched API key."""
+    if api_key is not None:
+        monkeypatch.setenv("VIRUSTOTAL_API_KEY", api_key)
+    else:
+        monkeypatch.delenv("VIRUSTOTAL_API_KEY", raising=False)
+    return VirusTotalProvider()
+
+
+class TestVirusTotalSupports:
+    """VirusTotalProvider.supports() for each IOC type."""
+
+    def test_supports_ipv4(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        assert p.supports("ipv4") is True
+
+    def test_supports_ipv6(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        assert p.supports("ipv6") is True
+
+    def test_supports_domain(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        assert p.supports("domain") is True
+
+    def test_supports_url(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        assert p.supports("url") is True
+
+    def test_rejects_email(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        assert p.supports("email") is False
+
+
+class TestVirusTotalMalicious:
+    """Malicious response normalization."""
+
+    def test_verdict_malicious(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(malicious=20, harmless=50, undetected=10))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.verdict == "malicious"
+
+    def test_confidence_present(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(malicious=20, harmless=50, undetected=10))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.confidence is not None
+        assert result.confidence > 0
+
+    def test_provider_name(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(malicious=10))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.provider == "virustotal"
+
+
+class TestVirusTotalClean:
+    """Clean / low-detection response normalization."""
+
+    def test_all_harmless(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(harmless=70, undetected=10))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("domain", "safe.example.com")
+        assert result.verdict == "clean"
+
+    def test_clean_confidence(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(harmless=70, undetected=10))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("domain", "safe.example.com")
+        assert result.confidence is not None
+        assert result.confidence > 0
+
+
+class TestVirusTotalSuspicious:
+    """Suspicious response (low malicious count or high suspicious count)."""
+
+    def test_low_malicious_is_suspicious(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(malicious=2, harmless=60, undetected=10))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.verdict == "suspicious"
+
+    def test_high_suspicious_is_suspicious(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(suspicious=5, harmless=60, undetected=10))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.verdict == "suspicious"
+
+
+class TestVirusTotalUnknown:
+    """Unknown response normalization."""
+
+    def test_all_undetected(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(undetected=80))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.verdict == "unknown"
+
+    def test_empty_stats(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        data = {"data": {"attributes": {"last_analysis_stats": {}}}}
+        resp = _FakeResponse(200, data)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.verdict == "unknown"
+
+    def test_no_stats_key(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        data = {"data": {"attributes": {}}}
+        resp = _FakeResponse(200, data)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.verdict == "unknown"
+
+
+class TestVirusTotalMissingKey:
+    """Missing API key → graceful error, not crash."""
+
+    def test_no_key_returns_error(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch, api_key=None)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.error is not None
+        assert "VIRUSTOTAL_API_KEY" in result.error
+
+    def test_no_key_verdict_not_enriched(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch, api_key=None)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.verdict == "not_enriched"
+
+    def test_no_key_provider_name(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch, api_key=None)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.provider == "virustotal"
+
+
+class TestVirusTotalHTTPErrors:
+    """HTTP error handling."""
+
+    def test_http_error_returns_error(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(403)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.error is not None
+        assert result.verdict == "not_enriched"
+
+    def test_rate_limit_returns_error(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(429)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.error is not None
+        assert "rate limit" in result.error.lower()
+        assert result.verdict == "not_enriched"
+
+    def test_timeout_returns_error(self, monkeypatch):
+        import httpx as _httpx
+        p = _make_vt_provider(monkeypatch)
+        def _raise_timeout(*a, **kw):
+            raise _httpx.TimeoutException("timed out")
+        monkeypatch.setattr("httpx.get", _raise_timeout)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.error is not None
+        assert result.verdict == "not_enriched"
+
+    def test_connection_error_returns_error(self, monkeypatch):
+        import httpx as _httpx
+        p = _make_vt_provider(monkeypatch)
+        def _raise_conn(*a, **kw):
+            raise _httpx.ConnectError("connection refused")
+        monkeypatch.setattr("httpx.get", _raise_conn)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.error is not None
+        assert result.verdict == "not_enriched"
+
+
+class TestVirusTotalRawData:
+    """raw_data and API key safety."""
+
+    def test_raw_data_present(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch, api_key="secret-key-abc")
+        resp = _FakeResponse(200, _vt_response(malicious=10))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert result.raw_data is not None
+
+    def test_api_key_not_in_raw_data(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch, api_key="secret-key-abc")
+        resp = _FakeResponse(200, _vt_response(malicious=10))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        import json
+        raw_str = json.dumps(result.raw_data)
+        assert "secret-key-abc" not in raw_str
+
+    def test_has_data_attributes(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(malicious=10))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "1.2.3.4")
+        assert "data" in result.raw_data
+        assert "attributes" in result.raw_data["data"]
+
+
+class TestVirusTotalGeoASN:
+    """Geo/ASN metadata extraction."""
+
+    def test_country_extracted(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(
+            harmless=70, country="US", asn=15169, as_owner="Google LLC",
+        ))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "8.8.8.8")
+        assert result.country == "US"
+        assert result.country_code == "US"
+
+    def test_asn_formatted(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(
+            harmless=70, asn=15169, as_owner="Google LLC",
+        ))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "8.8.8.8")
+        assert result.asn == "AS15169"
+
+    def test_organization_extracted(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(
+            harmless=70, as_owner="Google LLC",
+        ))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("ipv4", "8.8.8.8")
+        assert result.organization == "Google LLC"
+
+    def test_no_geo_returns_none(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        resp = _FakeResponse(200, _vt_response(harmless=70))
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
+        result = p.enrich("domain", "example.com")
+        assert result.country is None
+        assert result.asn is None
+
+
+class TestVirusTotalIOCTypes:
+    """Each IOC type uses the correct VT endpoint."""
+
+    def test_ipv4_url(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        called_urls = []
+        def _capture(url, **kw):
+            called_urls.append(url)
+            return _FakeResponse(200, _vt_response(harmless=70))
+        monkeypatch.setattr("httpx.get", _capture)
+        p.enrich("ipv4", "1.2.3.4")
+        assert "/ip_addresses/1.2.3.4" in called_urls[0]
+
+    def test_ipv6_url(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        called_urls = []
+        def _capture(url, **kw):
+            called_urls.append(url)
+            return _FakeResponse(200, _vt_response(harmless=70))
+        monkeypatch.setattr("httpx.get", _capture)
+        p.enrich("ipv6", "::1")
+        assert "/ip_addresses/::1" in called_urls[0]
+
+    def test_domain_url(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        called_urls = []
+        def _capture(url, **kw):
+            called_urls.append(url)
+            return _FakeResponse(200, _vt_response(harmless=70))
+        monkeypatch.setattr("httpx.get", _capture)
+        p.enrich("domain", "evil.test")
+        assert "/domains/evil.test" in called_urls[0]
+
+    def test_url_uses_base64(self, monkeypatch):
+        p = _make_vt_provider(monkeypatch)
+        called_urls = []
+        def _capture(url, **kw):
+            called_urls.append(url)
+            return _FakeResponse(200, _vt_response(harmless=70))
+        monkeypatch.setattr("httpx.get", _capture)
+        p.enrich("url", "http://evil.test/malware")
+        assert "/urls/" in called_urls[0]
+        # Should NOT contain the raw URL
+        assert "http://evil.test/malware" not in called_urls[0]
+
+
+class TestVirusTotalVerdictMapping:
+    """Detailed _compute_verdict tests."""
+
+    def test_5_malicious_is_malicious(self):
+        v, c = VirusTotalProvider._compute_verdict(
+            {"malicious": 5, "suspicious": 0, "harmless": 60, "undetected": 5}
+        )
+        assert v == "malicious"
+
+    def test_4_malicious_is_suspicious(self):
+        v, c = VirusTotalProvider._compute_verdict(
+            {"malicious": 4, "suspicious": 0, "harmless": 60, "undetected": 6}
+        )
+        assert v == "suspicious"
+
+    def test_3_suspicious_0_malicious_is_suspicious(self):
+        v, c = VirusTotalProvider._compute_verdict(
+            {"malicious": 0, "suspicious": 3, "harmless": 60, "undetected": 7}
+        )
+        assert v == "suspicious"
+
+    def test_0_mal_0_sus_many_harmless_is_clean(self):
+        v, c = VirusTotalProvider._compute_verdict(
+            {"malicious": 0, "suspicious": 0, "harmless": 70, "undetected": 0}
+        )
+        assert v == "clean"
+
+    def test_all_undetected_is_unknown(self):
+        v, c = VirusTotalProvider._compute_verdict(
+            {"malicious": 0, "suspicious": 0, "harmless": 0, "undetected": 70}
+        )
+        assert v == "unknown"
+
+    def test_empty_is_unknown(self):
+        v, c = VirusTotalProvider._compute_verdict({})
+        assert v == "unknown"
+        assert c is None
+
+    def test_valid_verdict_vocabulary(self):
+        """All computed verdicts are in VALID_VERDICTS."""
+        test_cases = [
+            {"malicious": 10, "harmless": 50},
+            {"malicious": 2, "harmless": 50},
+            {"suspicious": 5, "harmless": 50},
+            {"harmless": 70},
+            {"undetected": 70},
+            {},
+        ]
+        for stats in test_cases:
+            v, _ = VirusTotalProvider._compute_verdict(stats)
+            assert v in VALID_VERDICTS, f"verdict {v!r} not in VALID_VERDICTS for {stats}"

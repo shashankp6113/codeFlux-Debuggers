@@ -190,6 +190,164 @@ class NoOpProvider(ThreatIntelProvider):
 
 
 # ---------------------------------------------------------------------------
+# VirusTotal provider
+# ---------------------------------------------------------------------------
+
+class VirusTotalProvider(ThreatIntelProvider):
+    """Threat-intelligence provider backed by the VirusTotal API v3.
+
+    Enriches ``ipv4``, ``ipv6``, ``domain``, and ``url`` IOCs.
+    Email IOCs are not supported.
+
+    The API key is read from the ``VIRUSTOTAL_API_KEY`` environment
+    variable.  If the variable is not set, every enrichment call
+    returns an error result rather than crashing the pipeline.
+
+    Verdict mapping
+    ~~~~~~~~~~~~~~~
+    VirusTotal responses include ``last_analysis_stats`` with counts
+    of engines that classify the target as ``malicious``,
+    ``suspicious``, ``harmless``, and ``undetected``.
+
+    - **malicious**: ≥ 5 engines flag malicious
+    - **suspicious**: 1–4 engines flag malicious, or ≥ 3 flag suspicious
+    - **clean**: 0 malicious, 0 suspicious, ≥ 1 harmless
+    - **unknown**: everything else (no data, all undetected, etc.)
+
+    Confidence is derived from the ratio of agreeing engines.
+    """
+
+    _BASE_URL = "https://www.virustotal.com/api/v3"
+    _TIMEOUT = 15  # seconds
+
+    def __init__(self) -> None:
+        import os
+        self._api_key: Optional[str] = os.environ.get("VIRUSTOTAL_API_KEY")
+
+    @property
+    def name(self) -> str:
+        return "virustotal"
+
+    def supports(self, ioc_type: str) -> bool:
+        return ioc_type in {"ipv4", "ipv6", "domain", "url"}
+
+    def enrich(self, ioc_type: str, ioc_value: str) -> EnrichmentResult:
+        if not self._api_key:
+            return EnrichmentResult(
+                ioc_type=ioc_type,
+                ioc_value=ioc_value,
+                verdict="not_enriched",
+                provider=self.name,
+                error="VIRUSTOTAL_API_KEY environment variable is not set",
+            )
+
+        try:
+            return self._do_enrich(ioc_type, ioc_value)
+        except Exception as exc:
+            return EnrichmentResult(
+                ioc_type=ioc_type,
+                ioc_value=ioc_value,
+                verdict="not_enriched",
+                provider=self.name,
+                error=f"VirusTotal API error: {exc}",
+            )
+
+    # ------------------------------------------------------------------
+
+    def _do_enrich(self, ioc_type: str, ioc_value: str) -> EnrichmentResult:
+        import httpx
+
+        url = self._build_url(ioc_type, ioc_value)
+        headers = {"x-apikey": self._api_key}
+
+        resp = httpx.get(url, headers=headers, timeout=self._TIMEOUT)
+
+        if resp.status_code == 429:
+            return EnrichmentResult(
+                ioc_type=ioc_type,
+                ioc_value=ioc_value,
+                verdict="not_enriched",
+                provider=self.name,
+                error="VirusTotal API rate limit exceeded",
+            )
+
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Strip the full response to the data envelope
+        attrs = data.get("data", {}).get("attributes", {})
+
+        # Build raw_data WITHOUT the API key
+        raw_data = data
+        # Ensure no auth headers leak into raw_data
+        if "headers" in raw_data:
+            raw_data.pop("headers", None)
+
+        # Extract geo / network metadata (available for IPs)
+        country = attrs.get("country")
+        country_code = attrs.get("country")  # VT uses 2-letter in "country"
+        asn_val = attrs.get("asn")
+        asn_str = f"AS{asn_val}" if asn_val is not None else None
+        organization = attrs.get("as_owner")
+
+        # Compute verdict from last_analysis_stats
+        stats = attrs.get("last_analysis_stats", {})
+        verdict, confidence = self._compute_verdict(stats)
+
+        return EnrichmentResult(
+            ioc_type=ioc_type,
+            ioc_value=ioc_value,
+            verdict=verdict,
+            confidence=confidence,
+            country=country,
+            country_code=country_code,
+            asn=asn_str,
+            organization=organization,
+            provider=self.name,
+            raw_data=raw_data,
+        )
+
+    def _build_url(self, ioc_type: str, ioc_value: str) -> str:
+        if ioc_type in ("ipv4", "ipv6"):
+            return f"{self._BASE_URL}/ip_addresses/{ioc_value}"
+        elif ioc_type == "domain":
+            return f"{self._BASE_URL}/domains/{ioc_value}"
+        elif ioc_type == "url":
+            import base64
+            # VT URL lookup uses base64url(url) as the identifier
+            url_id = base64.urlsafe_b64encode(
+                ioc_value.encode()
+            ).decode().rstrip("=")
+            return f"{self._BASE_URL}/urls/{url_id}"
+        raise ValueError(f"Unsupported IOC type: {ioc_type}")
+
+    @staticmethod
+    def _compute_verdict(stats: Dict[str, Any]) -> tuple:
+        """Map VT analysis stats to (verdict, confidence).
+
+        Returns:
+            A tuple of (verdict_str, confidence_float).
+        """
+        malicious = stats.get("malicious", 0) or 0
+        suspicious = stats.get("suspicious", 0) or 0
+        harmless = stats.get("harmless", 0) or 0
+        undetected = stats.get("undetected", 0) or 0
+
+        total = malicious + suspicious + harmless + undetected
+        if total == 0:
+            return ("unknown", None)
+
+        if malicious >= 5:
+            return ("malicious", round(malicious / total, 2))
+        if malicious >= 1 or suspicious >= 3:
+            return ("suspicious", round((malicious + suspicious) / total, 2))
+        if malicious == 0 and suspicious == 0 and harmless >= 1:
+            return ("clean", round(harmless / total, 2))
+
+        return ("unknown", None)
+
+
+# ---------------------------------------------------------------------------
 # Enrichment service
 # ---------------------------------------------------------------------------
 
