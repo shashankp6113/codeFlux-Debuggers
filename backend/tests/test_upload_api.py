@@ -1250,3 +1250,135 @@ Just some plain text with no IP addresses.
         assert "received_hops" in forensics
         assert "authentication" in forensics
         assert "flags" in forensics
+
+
+# ---------------------------------------------------------------------------
+# Tests: AI analysis in upload response
+# ---------------------------------------------------------------------------
+
+from ai_analysis import AIAnalysisProvider, AIAnalysisResult  # noqa: E402
+
+
+class _MockAIProvider(AIAnalysisProvider):
+    """Mock AI provider returning a successful result."""
+
+    @property
+    def name(self):
+        return "mock-ai"
+
+    def analyze(self, evidence):
+        return AIAnalysisResult(
+            classification="suspicious",
+            confidence=0.82,
+            summary="Test AI summary",
+            explanation="Test AI explanation",
+            recommended_actions=["Review sender", "Check links"],
+            provider="mock-ai",
+        )
+
+
+class _FailAIProvider(AIAnalysisProvider):
+    """Mock AI provider that always raises."""
+
+    @property
+    def name(self):
+        return "fail-ai"
+
+    def analyze(self, evidence):
+        raise RuntimeError("AI crash")
+
+
+class TestUploadAIAnalysis:
+    """AI analysis appears in the upload response."""
+
+    def _upload(self):
+        with open(SAMPLE_EML, "rb") as f:
+            return client.post(
+                "/api/emails/upload",
+                data={"email_account_id": 1},
+                files={"file": ("test.eml", f, "message/rfc822")},
+            )
+
+    def _upload_inline(self, eml_bytes):
+        import io
+        return client.post(
+            "/api/emails/upload",
+            data={"email_account_id": 1},
+            files={"file": ("test.eml", io.BytesIO(eml_bytes), "message/rfc822")},
+        )
+
+    def test_ai_analysis_present(self):
+        """ai_analysis key exists in forensics response."""
+        r = self._upload()
+        assert r.status_code == 200
+        forensics = r.json()["forensics"]
+        assert "ai_analysis" in forensics
+
+    def test_ai_success_fields(self, monkeypatch):
+        """Mocked AI provider result appears in response."""
+        monkeypatch.setattr("analysis.get_ai_provider", lambda: _MockAIProvider())
+        r = self._upload()
+        ai = r.json()["forensics"]["ai_analysis"]
+        assert ai["classification"] == "suspicious"
+        assert ai["confidence"] == pytest.approx(0.82)
+        assert ai["summary"] == "Test AI summary"
+        assert ai["explanation"] == "Test AI explanation"
+        assert ai["recommended_actions"] == ["Review sender", "Check links"]
+        assert ai["provider"] == "mock-ai"
+        assert ai["error"] is None
+
+    def test_ai_only_expected_fields(self, monkeypatch):
+        """AI response contains only the intended fields — no secrets."""
+        monkeypatch.setattr("analysis.get_ai_provider", lambda: _MockAIProvider())
+        r = self._upload()
+        ai = r.json()["forensics"]["ai_analysis"]
+        allowed = {
+            "classification", "confidence", "summary", "explanation",
+            "recommended_actions", "provider", "error",
+        }
+        assert set(ai.keys()) == allowed
+
+    def test_ai_failure_returns_unknown(self, monkeypatch):
+        """AI provider crash → classification unknown with error."""
+        monkeypatch.setattr("analysis.get_ai_provider", lambda: _FailAIProvider())
+        r = self._upload()
+        assert r.status_code == 200
+        ai = r.json()["forensics"]["ai_analysis"]
+        assert ai["classification"] == "unknown"
+        assert ai["error"] is not None
+
+    def test_noop_ai_response(self, monkeypatch):
+        """NoOp provider → unknown classification, no error."""
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        from ai_analysis import NoOpAIProvider
+        monkeypatch.setattr("analysis.get_ai_provider", lambda: NoOpAIProvider())
+        r = self._upload()
+        ai = r.json()["forensics"]["ai_analysis"]
+        assert ai["classification"] == "unknown"
+        assert ai["provider"] == "noop"
+        assert ai["error"] is None
+
+    def test_existing_fields_still_present(self, monkeypatch):
+        """AI addition does not break existing forensic response fields."""
+        monkeypatch.setattr("analysis.get_ai_provider", lambda: _MockAIProvider())
+        r = self._upload()
+        forensics = r.json()["forensics"]
+        assert "received_hops" in forensics
+        assert "authentication" in forensics
+        assert "identity" in forensics
+        assert "flags" in forensics
+        assert "threat_score" in forensics
+        assert "ioc_extraction" in forensics
+        assert "threat_intelligence" in forensics
+        assert "geolocation" in forensics
+        assert "ai_analysis" in forensics
+
+    def test_no_secrets_in_ai_response(self, monkeypatch):
+        """AI response must not contain API keys or tokens."""
+        monkeypatch.setattr("analysis.get_ai_provider", lambda: _MockAIProvider())
+        r = self._upload()
+        import json
+        response_str = json.dumps(r.json()["forensics"]["ai_analysis"])
+        for sensitive in ["api_key", "access_token", "refresh_token",
+                          "client_secret", "password", "bearer"]:
+            assert sensitive not in response_str.lower()

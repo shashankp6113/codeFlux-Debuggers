@@ -207,6 +207,18 @@ class GeolocationBatchResultSchema(BaseModel):
     provider: str = ""
 
 
+class AIAnalysisSchema(BaseModel):
+    """AI forensic analysis result."""
+
+    classification: str = "unknown"
+    confidence: Optional[float] = None
+    summary: Optional[str] = None
+    explanation: Optional[str] = None
+    recommended_actions: List[str] = []
+    provider: str = ""
+    error: Optional[str] = None
+
+
 class ForensicAnalysisSchema(BaseModel):
     """Complete forensic analysis result for one email."""
 
@@ -218,6 +230,7 @@ class ForensicAnalysisSchema(BaseModel):
     ioc_extraction: Optional[IOCExtractionResultSchema] = None
     threat_intelligence: Optional[ThreatIntelResultSchema] = None
     geolocation: Optional[GeolocationBatchResultSchema] = None
+    ai_analysis: Optional[AIAnalysisSchema] = None
 
 
 # ---------------------------------------------------------------------------
