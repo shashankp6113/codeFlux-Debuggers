@@ -32,6 +32,16 @@ class AuthResultEntrySchema(BaseModel):
     dmarc: Optional[str] = None
 
 
+class DKIMSignatureEntrySchema(BaseModel):
+    """One parsed DKIM-Signature header with extracted tag values."""
+
+    raw: str = ""
+    domain: Optional[str] = None
+    selector: Optional[str] = None
+    algorithm: Optional[str] = None
+    signed_headers: Optional[List[str]] = None
+
+
 class AuthenticationHeadersSchema(BaseModel):
     """Authentication-related headers extracted verbatim.
 
@@ -70,6 +80,9 @@ class AuthenticationHeadersSchema(BaseModel):
 
     # Per-header structured entries with authserv-id
     auth_results_entries: List[AuthResultEntrySchema] = []
+
+    # Per-header structured DKIM-Signature entries
+    dkim_signature_entries: List[DKIMSignatureEntrySchema] = []
 
     @model_validator(mode="before")
     @classmethod

@@ -78,6 +78,28 @@ class AuthResultEntry:
 
 
 @dataclass
+class DKIMSignatureEntry:
+    """One parsed DKIM-Signature header with extracted tag values.
+
+    Per RFC 6376 a DKIM-Signature header contains semicolon-separated
+    ``tag=value`` pairs.  This dataclass extracts the forensically
+    relevant tags while preserving the raw header for evidence.
+
+    Duplicate-tag behaviour
+    ~~~~~~~~~~~~~~~~~~~~~~~
+    RFC 6376 §3.2 states that duplicate tags are not permitted, but
+    malformed signatures do exist in the wild.  This parser keeps the
+    **first** occurrence of each tag and silently ignores later duplicates.
+    """
+
+    raw: str = ""
+    domain: Optional[str] = None          # d= signing domain
+    selector: Optional[str] = None        # s= selector
+    algorithm: Optional[str] = None       # a= algorithm (e.g. rsa-sha256)
+    signed_headers: Optional[List[str]] = None  # h= list of header names
+
+
+@dataclass
 class AuthenticationHeaders:
     """Authentication-related headers — raw values plus structured verdicts.
 
@@ -121,6 +143,9 @@ class AuthenticationHeaders:
 
     # --- Per-header structured Authentication-Results entries ---
     auth_results_entries: List[AuthResultEntry] = field(default_factory=list)
+
+    # --- Per-header structured DKIM-Signature entries ---
+    dkim_signature_entries: List[DKIMSignatureEntry] = field(default_factory=list)
 
     # --- Backward-compatible properties ---
 
@@ -589,6 +614,59 @@ def _parse_received_spf_verdict(header_value: str) -> Optional[str]:
     return None
 
 
+def _parse_dkim_tags(header_value: str) -> dict:
+    """Parse DKIM-Signature tag=value pairs into a dict.
+
+    Per RFC 6376 §3.2 the header value is a semicolon-separated list of
+    ``tag=value`` pairs.  Tag names are case-sensitive and typically
+    lowercase.  Whitespace around ``=`` and around values is stripped.
+
+    Duplicate tags: RFC 6376 disallows duplicate tags, but malformed
+    signatures exist.  The **first** occurrence wins; later duplicates
+    are silently ignored.
+
+    Returns:
+        A dict mapping lowercase tag names to stripped values.
+    """
+    tags: dict = {}
+    # Split on semicolons; handle missing trailing semicolon
+    for part in header_value.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        eq_pos = part.find("=")
+        if eq_pos == -1:
+            continue
+        tag_name = part[:eq_pos].strip()
+        tag_value = part[eq_pos + 1:].strip()
+        # First occurrence wins (duplicate-tag rule)
+        if tag_name and tag_name not in tags:
+            tags[tag_name] = tag_value
+    return tags
+
+
+def _build_dkim_entry(header_value: str) -> DKIMSignatureEntry:
+    """Build a DKIMSignatureEntry from a raw DKIM-Signature header value."""
+    tags = _parse_dkim_tags(header_value)
+
+    # Parse h= into a list of header names
+    signed_headers = None
+    h_value = tags.get("h")
+    if h_value is not None:
+        signed_headers = [
+            name.strip() for name in h_value.split(":")
+            if name.strip()
+        ]
+
+    return DKIMSignatureEntry(
+        raw=header_value,
+        domain=tags.get("d"),
+        selector=tags.get("s"),
+        algorithm=tags.get("a"),
+        signed_headers=signed_headers,
+    )
+
+
 def _populate_verdicts(auth: AuthenticationHeaders) -> None:
     """Parse structured verdicts from raw authentication headers.
 
@@ -633,6 +711,10 @@ def _populate_verdicts(auth: AuthenticationHeaders) -> None:
         # First header sets the singular verdict field
         if i == 0:
             auth.received_spf_verdict = verdict
+
+    # Parse all DKIM-Signature headers into structured entries
+    for header_value in auth.all_dkim_signatures:
+        auth.dkim_signature_entries.append(_build_dkim_entry(header_value))
 
 
 # ---------------------------------------------------------------------------

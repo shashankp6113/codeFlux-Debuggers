@@ -7,6 +7,7 @@ from forensics import (
     ReceivedHop,
     AuthenticationHeaders,
     AuthResultEntry,
+    DKIMSignatureEntry,
     IdentityHeaders,
     ForensicFlag,
     analyze_headers,
@@ -19,6 +20,8 @@ from forensics import (
     _parse_authentication_results,
     _parse_received_spf_verdict,
     _extract_authserv_id,
+    _parse_dkim_tags,
+    _build_dkim_entry,
     _populate_verdicts,
     VALID_VERDICTS,
 )
@@ -1877,4 +1880,445 @@ class TestAuthFailureDescriptions:
         flags = analyze_headers(HEADERS_SPF_SOFTFAIL_ONLY).flags
         sf = [f for f in flags if f.rule_id == "SPF_SOFTFAIL"][0]
         assert "reported" in sf.description.lower()
+
+
+# ---------------------------------------------------------------------------
+# DKIM-Signature metadata extraction test fixtures
+# ---------------------------------------------------------------------------
+
+HEADERS_DKIM_COMPLETE = """\
+DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=selector1; h=From:To:Subject:Date; b=abc123
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-001@example.test>
+Subject: Complete DKIM"""
+
+HEADERS_DKIM_MULTI = """\
+DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=sel1; h=From:To:Subject; b=aaa
+DKIM-Signature: v=1; a=ed25519-sha256; d=mailinglist.org; s=sel2; h=From:To:Date; b=bbb
+DKIM-Signature: v=1; a=rsa-sha1; d=legacy.net; s=sel3; b=ccc
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-002@example.test>
+Subject: Multiple DKIM"""
+
+HEADERS_DKIM_MISSING_D = """\
+DKIM-Signature: v=1; a=rsa-sha256; s=sel; h=From:To; b=abc
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-003@example.test>
+Subject: Missing d tag"""
+
+HEADERS_DKIM_MISSING_S = """\
+DKIM-Signature: v=1; a=rsa-sha256; d=example.com; h=From:To; b=abc
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-004@example.test>
+Subject: Missing s tag"""
+
+HEADERS_DKIM_MISSING_A = """\
+DKIM-Signature: v=1; d=example.com; s=sel; h=From:To; b=abc
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-005@example.test>
+Subject: Missing a tag"""
+
+HEADERS_DKIM_MISSING_H = """\
+DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=sel; b=abc
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-006@example.test>
+Subject: Missing h tag"""
+
+HEADERS_DKIM_WHITESPACE = """\
+DKIM-Signature: v = 1 ; a = rsa-sha256 ; d = example.com ; s = sel1 ; h = From : To : Subject ; b = xyz
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-007@example.test>
+Subject: Whitespace around tags"""
+
+HEADERS_DKIM_FOLDED = """\
+DKIM-Signature: v=1; a=rsa-sha256;
+\td=example.com; s=selector1;
+\th=From:To:Subject:Date:Message-ID;
+\tb=longbase64signaturevalue
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-008@example.test>
+Subject: Folded DKIM"""
+
+HEADERS_DKIM_MALFORMED = """\
+DKIM-Signature: this is not a valid dkim signature at all
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-009@example.test>
+Subject: Malformed DKIM"""
+
+HEADERS_DKIM_EMPTY_VALUE = """\
+DKIM-Signature: 
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-010@example.test>
+Subject: Empty DKIM"""
+
+HEADERS_DKIM_NO_TRAILING_SEMI = """\
+DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=sel1; h=From:To; b=abc
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dkim-meta-011@example.test>
+Subject: No trailing semicolon"""
+
+
+# ---------------------------------------------------------------------------
+# Tests: _parse_dkim_tags unit tests
+# ---------------------------------------------------------------------------
+
+class TestParseDkimTags:
+    """Unit tests for DKIM tag=value parsing."""
+
+    def test_simple_tags(self):
+        tags = _parse_dkim_tags("v=1; a=rsa-sha256; d=example.com; s=sel")
+        assert tags["v"] == "1"
+        assert tags["a"] == "rsa-sha256"
+        assert tags["d"] == "example.com"
+        assert tags["s"] == "sel"
+
+    def test_whitespace_around_equals(self):
+        tags = _parse_dkim_tags("d = example.com ; s = sel1")
+        assert tags["d"] == "example.com"
+        assert tags["s"] == "sel1"
+
+    def test_empty_string(self):
+        tags = _parse_dkim_tags("")
+        assert tags == {}
+
+    def test_no_equals(self):
+        tags = _parse_dkim_tags("garbage without equals")
+        assert tags == {}
+
+    def test_missing_trailing_semicolon(self):
+        tags = _parse_dkim_tags("d=example.com; s=sel")
+        assert tags["d"] == "example.com"
+        assert tags["s"] == "sel"
+
+    def test_trailing_semicolon(self):
+        tags = _parse_dkim_tags("d=example.com; s=sel;")
+        assert tags["d"] == "example.com"
+        assert tags["s"] == "sel"
+
+    def test_duplicate_tags_first_wins(self):
+        tags = _parse_dkim_tags("d=first.com; d=second.com")
+        assert tags["d"] == "first.com"
+
+    def test_multiple_duplicate_tags(self):
+        tags = _parse_dkim_tags("d=first.com; s=sel1; d=second.com; s=sel2")
+        assert tags["d"] == "first.com"
+        assert tags["s"] == "sel1"
+
+    def test_empty_tag_value(self):
+        tags = _parse_dkim_tags("d=; s=sel")
+        assert tags["d"] == ""
+        assert tags["s"] == "sel"
+
+    def test_h_tag_raw(self):
+        tags = _parse_dkim_tags("h=From:To:Subject")
+        assert tags["h"] == "From:To:Subject"
+
+    def test_b_tag_preserved(self):
+        tags = _parse_dkim_tags("b=abc123def456")
+        assert tags["b"] == "abc123def456"
+
+    def test_case_sensitive_tags(self):
+        """Tag names are case-sensitive per RFC 6376."""
+        tags = _parse_dkim_tags("d=lower.com; D=upper.com")
+        assert tags["d"] == "lower.com"
+        assert tags["D"] == "upper.com"
+
+
+# ---------------------------------------------------------------------------
+# Tests: _build_dkim_entry unit tests
+# ---------------------------------------------------------------------------
+
+class TestBuildDkimEntry:
+    """Unit tests for building DKIMSignatureEntry from raw header."""
+
+    def test_complete_signature(self):
+        raw = "v=1; a=rsa-sha256; d=example.com; s=sel; h=From:To:Subject; b=abc"
+        entry = _build_dkim_entry(raw)
+        assert entry.domain == "example.com"
+        assert entry.selector == "sel"
+        assert entry.algorithm == "rsa-sha256"
+        assert entry.signed_headers == ["From", "To", "Subject"]
+        assert entry.raw == raw
+
+    def test_missing_d(self):
+        entry = _build_dkim_entry("v=1; a=rsa-sha256; s=sel; b=abc")
+        assert entry.domain is None
+        assert entry.selector == "sel"
+
+    def test_missing_s(self):
+        entry = _build_dkim_entry("v=1; a=rsa-sha256; d=example.com; b=abc")
+        assert entry.selector is None
+        assert entry.domain == "example.com"
+
+    def test_missing_a(self):
+        entry = _build_dkim_entry("v=1; d=example.com; s=sel; b=abc")
+        assert entry.algorithm is None
+
+    def test_missing_h(self):
+        entry = _build_dkim_entry("v=1; a=rsa-sha256; d=example.com; s=sel; b=abc")
+        assert entry.signed_headers is None
+
+    def test_h_whitespace_around_colons(self):
+        entry = _build_dkim_entry("h= From : To : Subject ")
+        assert entry.signed_headers == ["From", "To", "Subject"]
+
+    def test_h_empty_value(self):
+        entry = _build_dkim_entry("h=")
+        assert entry.signed_headers == []
+
+    def test_empty_string(self):
+        entry = _build_dkim_entry("")
+        assert entry.domain is None
+        assert entry.selector is None
+        assert entry.algorithm is None
+        assert entry.signed_headers is None
+        assert entry.raw == ""
+
+    def test_malformed_no_tags(self):
+        entry = _build_dkim_entry("this is garbage")
+        assert entry.domain is None
+        assert entry.raw == "this is garbage"
+
+    def test_duplicate_d_first_wins(self):
+        entry = _build_dkim_entry("d=first.com; d=second.com; s=sel")
+        assert entry.domain == "first.com"
+
+
+# ---------------------------------------------------------------------------
+# Tests: DKIM entries via analyze_headers (integration)
+# ---------------------------------------------------------------------------
+
+class TestDKIMSignatureEntriesSingle:
+    """Single DKIM-Signature header → one structured entry."""
+
+    def test_one_entry_created(self):
+        result = analyze_headers(HEADERS_DKIM_COMPLETE)
+        assert len(result.authentication.dkim_signature_entries) == 1
+
+    def test_domain_extracted(self):
+        result = analyze_headers(HEADERS_DKIM_COMPLETE)
+        assert result.authentication.dkim_signature_entries[0].domain == "example.com"
+
+    def test_selector_extracted(self):
+        result = analyze_headers(HEADERS_DKIM_COMPLETE)
+        assert result.authentication.dkim_signature_entries[0].selector == "selector1"
+
+    def test_algorithm_extracted(self):
+        result = analyze_headers(HEADERS_DKIM_COMPLETE)
+        assert result.authentication.dkim_signature_entries[0].algorithm == "rsa-sha256"
+
+    def test_signed_headers_extracted(self):
+        result = analyze_headers(HEADERS_DKIM_COMPLETE)
+        assert result.authentication.dkim_signature_entries[0].signed_headers == [
+            "From", "To", "Subject", "Date"
+        ]
+
+    def test_raw_preserved(self):
+        result = analyze_headers(HEADERS_DKIM_COMPLETE)
+        entry = result.authentication.dkim_signature_entries[0]
+        assert "rsa-sha256" in entry.raw
+        assert "example.com" in entry.raw
+
+    def test_all_dkim_signatures_unchanged(self):
+        """all_dkim_signatures still contains raw strings."""
+        result = analyze_headers(HEADERS_DKIM_COMPLETE)
+        assert len(result.authentication.all_dkim_signatures) == 1
+        assert "example.com" in result.authentication.all_dkim_signatures[0]
+
+
+class TestDKIMSignatureEntriesMultiple:
+    """Multiple DKIM-Signature headers → entries in order."""
+
+    def test_three_entries(self):
+        result = analyze_headers(HEADERS_DKIM_MULTI)
+        assert len(result.authentication.dkim_signature_entries) == 3
+
+    def test_ordering_by_domain(self):
+        result = analyze_headers(HEADERS_DKIM_MULTI)
+        domains = [e.domain for e in result.authentication.dkim_signature_entries]
+        assert domains == ["example.com", "mailinglist.org", "legacy.net"]
+
+    def test_ordering_by_selector(self):
+        result = analyze_headers(HEADERS_DKIM_MULTI)
+        selectors = [e.selector for e in result.authentication.dkim_signature_entries]
+        assert selectors == ["sel1", "sel2", "sel3"]
+
+    def test_different_algorithms(self):
+        result = analyze_headers(HEADERS_DKIM_MULTI)
+        algs = [e.algorithm for e in result.authentication.dkim_signature_entries]
+        assert algs == ["rsa-sha256", "ed25519-sha256", "rsa-sha1"]
+
+    def test_third_has_no_h(self):
+        result = analyze_headers(HEADERS_DKIM_MULTI)
+        assert result.authentication.dkim_signature_entries[2].signed_headers is None
+
+    def test_all_dkim_signatures_also_three(self):
+        result = analyze_headers(HEADERS_DKIM_MULTI)
+        assert len(result.authentication.all_dkim_signatures) == 3
+
+
+class TestDKIMSignatureEntriesMissingTags:
+    """Missing individual tags → None for that field."""
+
+    def test_missing_d(self):
+        result = analyze_headers(HEADERS_DKIM_MISSING_D)
+        assert result.authentication.dkim_signature_entries[0].domain is None
+
+    def test_missing_s(self):
+        result = analyze_headers(HEADERS_DKIM_MISSING_S)
+        assert result.authentication.dkim_signature_entries[0].selector is None
+
+    def test_missing_a(self):
+        result = analyze_headers(HEADERS_DKIM_MISSING_A)
+        assert result.authentication.dkim_signature_entries[0].algorithm is None
+
+    def test_missing_h(self):
+        result = analyze_headers(HEADERS_DKIM_MISSING_H)
+        assert result.authentication.dkim_signature_entries[0].signed_headers is None
+
+    def test_missing_d_others_present(self):
+        result = analyze_headers(HEADERS_DKIM_MISSING_D)
+        entry = result.authentication.dkim_signature_entries[0]
+        assert entry.algorithm == "rsa-sha256"
+        assert entry.selector == "sel"
+
+
+class TestDKIMSignatureEntriesWhitespace:
+    """Whitespace around tag names/values is handled."""
+
+    def test_domain_with_whitespace(self):
+        result = analyze_headers(HEADERS_DKIM_WHITESPACE)
+        assert result.authentication.dkim_signature_entries[0].domain == "example.com"
+
+    def test_algorithm_with_whitespace(self):
+        result = analyze_headers(HEADERS_DKIM_WHITESPACE)
+        assert result.authentication.dkim_signature_entries[0].algorithm == "rsa-sha256"
+
+    def test_selector_with_whitespace(self):
+        result = analyze_headers(HEADERS_DKIM_WHITESPACE)
+        assert result.authentication.dkim_signature_entries[0].selector == "sel1"
+
+    def test_h_with_whitespace(self):
+        result = analyze_headers(HEADERS_DKIM_WHITESPACE)
+        assert result.authentication.dkim_signature_entries[0].signed_headers == [
+            "From", "To", "Subject"
+        ]
+
+
+class TestDKIMSignatureEntriesFolded:
+    """Folded (multi-line) DKIM-Signature header is parsed correctly."""
+
+    def test_folded_domain(self):
+        result = analyze_headers(HEADERS_DKIM_FOLDED)
+        assert result.authentication.dkim_signature_entries[0].domain == "example.com"
+
+    def test_folded_selector(self):
+        result = analyze_headers(HEADERS_DKIM_FOLDED)
+        assert result.authentication.dkim_signature_entries[0].selector == "selector1"
+
+    def test_folded_algorithm(self):
+        result = analyze_headers(HEADERS_DKIM_FOLDED)
+        assert result.authentication.dkim_signature_entries[0].algorithm == "rsa-sha256"
+
+    def test_folded_signed_headers(self):
+        result = analyze_headers(HEADERS_DKIM_FOLDED)
+        assert result.authentication.dkim_signature_entries[0].signed_headers == [
+            "From", "To", "Subject", "Date", "Message-ID"
+        ]
+
+
+class TestDKIMSignatureEntriesMalformed:
+    """Malformed/empty DKIM signatures don't crash — produce entry with None fields."""
+
+    def test_malformed_entry_exists(self):
+        result = analyze_headers(HEADERS_DKIM_MALFORMED)
+        assert len(result.authentication.dkim_signature_entries) == 1
+
+    def test_malformed_domain_none(self):
+        result = analyze_headers(HEADERS_DKIM_MALFORMED)
+        assert result.authentication.dkim_signature_entries[0].domain is None
+
+    def test_malformed_raw_preserved(self):
+        result = analyze_headers(HEADERS_DKIM_MALFORMED)
+        assert "not a valid" in result.authentication.dkim_signature_entries[0].raw
+
+    def test_empty_entry_exists(self):
+        result = analyze_headers(HEADERS_DKIM_EMPTY_VALUE)
+        assert len(result.authentication.dkim_signature_entries) == 1
+
+    def test_empty_all_none(self):
+        result = analyze_headers(HEADERS_DKIM_EMPTY_VALUE)
+        entry = result.authentication.dkim_signature_entries[0]
+        assert entry.domain is None
+        assert entry.selector is None
+        assert entry.algorithm is None
+        assert entry.signed_headers is None
+
+    def test_no_dkim_headers(self):
+        result = analyze_headers(HEADERS_NO_AUTH)
+        assert result.authentication.dkim_signature_entries == []
+
+    def test_no_trailing_semicolon(self):
+        result = analyze_headers(HEADERS_DKIM_NO_TRAILING_SEMI)
+        entry = result.authentication.dkim_signature_entries[0]
+        assert entry.domain == "example.com"
+        assert entry.selector == "sel1"
+
+
+class TestDKIMSignatureEntriesHParsing:
+    """Detailed h= tag parsing tests."""
+
+    def test_single_header_name(self):
+        entry = _build_dkim_entry("h=From")
+        assert entry.signed_headers == ["From"]
+
+    def test_multiple_header_names(self):
+        entry = _build_dkim_entry("h=From:To:Subject:Date:Message-ID")
+        assert entry.signed_headers == ["From", "To", "Subject", "Date", "Message-ID"]
+
+    def test_whitespace_in_h(self):
+        entry = _build_dkim_entry("h= From : To : Subject ")
+        assert entry.signed_headers == ["From", "To", "Subject"]
+
+    def test_empty_h_value(self):
+        entry = _build_dkim_entry("h=")
+        assert entry.signed_headers == []
+
+    def test_trailing_colon(self):
+        entry = _build_dkim_entry("h=From:To:")
+        assert entry.signed_headers == ["From", "To"]
+
+    def test_double_colon(self):
+        """Consecutive colons produce no empty entries."""
+        entry = _build_dkim_entry("h=From::To")
+        assert entry.signed_headers == ["From", "To"]
+
+
+class TestDKIMSignatureEntriesDuplicateTags:
+    """Duplicate tag handling — first occurrence wins."""
+
+    def test_duplicate_d_in_analyze(self):
+        headers = """\
+DKIM-Signature: v=1; d=first.com; d=second.com; s=sel; a=rsa-sha256; b=abc
+From: sender@example.test
+To: recipient@dest.test
+Message-ID: <dup-001@example.test>
+Subject: Dup tags"""
+        result = analyze_headers(headers)
+        assert result.authentication.dkim_signature_entries[0].domain == "first.com"
+
+    def test_duplicate_s_first_wins(self):
+        entry = _build_dkim_entry("s=first; s=second; d=example.com")
+        assert entry.selector == "first"
 
