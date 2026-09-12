@@ -25,6 +25,7 @@ export default function EmailDetail() {
   const navigate = useNavigate();
   const [email, setEmail] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -141,6 +142,14 @@ export default function EmailDetail() {
                       ? "The AI provider took too long to respond. This is a transient error; you can safely retry later."
                       : "The AI provider encountered an unexpected failure and could not provide an explanation."}
                   </div>
+
+                  <button 
+                    onClick={handleRetryAI} 
+                    disabled={isRetrying}
+                    style={{ marginTop: '0.5rem', padding: '0.25rem 0.5rem', background: 'var(--bg-accent)', color: 'var(--text-primary)', border: '1px solid var(--border-base)', borderRadius: '4px', cursor: isRetrying ? 'not-allowed' : 'pointer', fontSize: '0.8rem' }}
+                  >
+                    {isRetrying ? 'Retrying...' : 'Retry AI Analysis'}
+                  </button>
                 </div>
               </div>
             ) : (

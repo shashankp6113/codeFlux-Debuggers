@@ -270,6 +270,71 @@ def get_email_report(
         
     return resp
 
+
+@app.post("/api/emails/{email_id}/retry-ai", response_model=EmailResponse)
+def retry_ai_analysis(
+    email_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retry AI analysis for an email, preserving deterministic forensics."""
+    from ai_analysis import build_ai_evidence, get_ai_provider, AIAnalysisResult
+    
+    email = (
+        db.query(Email)
+        .join(EmailAccount)
+        .filter(Email.id == email_id, EmailAccount.user_id == current_user.id)
+        .first()
+    )
+    
+    if not email:
+        raise HTTPException(status_code=404, detail="Email not found")
+        
+    fa = db.query(ForensicAnalysisRecord).filter_by(email_id=email.id).first()
+    if not fa or not fa.analysis:
+        raise HTTPException(status_code=404, detail="Forensic analysis not found for this email")
+
+    analysis_dict = dict(fa.analysis)
+    
+    email_metadata = {
+        "subject": email.subject,
+        "sender": email.sender,
+        "recipient": email.recipient,
+        "message_id": email.message_id,
+    }
+    
+    evidence = build_ai_evidence(analysis_dict, email_metadata=email_metadata)
+    
+    try:
+        ai_provider = get_ai_provider()
+        ai_result = ai_provider.analyze(evidence)
+    except Exception as exc:
+        ai_result = AIAnalysisResult(
+            classification="unknown",
+            provider="error",
+            error=f"AI provider raised an unexpected exception: {exc}",
+        )
+        
+    analysis_dict["ai_analysis"] = {
+        "classification": ai_result.classification,
+        "confidence": ai_result.confidence,
+        "summary": ai_result.summary,
+        "explanation": ai_result.explanation,
+        "recommended_actions": ai_result.recommended_actions,
+        "provider": ai_result.provider,
+        "error": ai_result.error,
+        "error_category": getattr(ai_result, "error_category", None),
+    }
+    
+    # SQLAlchemy requires re-assignment for JSON mutation tracking
+    fa.analysis = analysis_dict
+    db.commit()
+    db.refresh(fa)
+    
+    resp = EmailResponse.model_validate(email)
+    resp.forensics = ForensicAnalysisSchema.model_validate(fa.analysis)
+    return resp
+
 @app.get("/api/threats", response_model=List[ThreatSummaryResponse])
 def list_threats(
     risk_level: Optional[str] = None,

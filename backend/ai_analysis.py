@@ -14,7 +14,7 @@ Provides:
 Environment variables
 ~~~~~~~~~~~~~~~~~~~~~
 - ``GEMINI_API_KEY``  – Google Gemini API key (required for Gemini)
-- ``GEMINI_MODEL``    – Model name (optional, defaults to gemini-2.0-flash)
+- ``GEMINI_MODEL``    – Model name (optional, defaults to gemini-1.5-flash)
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ def get_ai_provider() -> AIAnalysisProvider:
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         return NoOpAIProvider()
-    model = os.environ.get("GEMINI_MODEL", "").strip() or "gemini-3.6-flash"
+    model = os.environ.get("GEMINI_MODEL", "").strip() or "gemini-1.5-flash"
     return GeminiAIProvider(api_key=api_key, model=model)
 
 
@@ -103,7 +103,7 @@ def get_ai_provider() -> AIAnalysisProvider:
 # Gemini AI provider
 # ---------------------------------------------------------------------------
 
-_DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
+_DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
 _GEMINI_TIMEOUT = 30  # seconds
 
 _GEMINI_SYSTEM_PROMPT = """\
