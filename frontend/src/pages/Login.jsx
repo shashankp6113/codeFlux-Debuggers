@@ -7,7 +7,7 @@ export default function Login() {
 
   const handleConnect = (data) => {
     if (data.token) {
-      login(data.token, data.email_account_id);
+      login(data.token, data.email_account_id, data.email_address);
     }
   };
 
