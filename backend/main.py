@@ -641,25 +641,44 @@ async def upload_email(
             detail=f"Failed to parse .eml file: {exc}",
         )
 
-    # Store in database
-    db_email = Email(
-        email_account_id=email_account_id,
-        message_id=parsed.message_id,
-        subject=parsed.subject,
-        sender=parsed.sender,
-        recipient=parsed.recipient,
-        cc=parsed.cc,
-        body_text=parsed.body_text,
-        body_html=parsed.body_html,
-        raw_headers=parsed.raw_headers,
-        received_at=parsed.received_at,
-    )
-    db.add(db_email)
-    db.commit()
-    db.refresh(db_email)
+    # Use a secure file hash for manual upload deduplication
+    import hashlib
+    upload_id = f"upload_{hashlib.sha256(raw_bytes).hexdigest()}"
 
-    # Run unified analysis pipeline
-    analysis_dict = run_email_analysis(parsed, db_email, db)
+    existing = db.query(Email).filter_by(
+        email_account_id=email_account_id,
+        message_id=upload_id
+    ).first()
+
+    has_analysis = False
+    if existing:
+        from models import ForensicAnalysis
+        db_forensic = db.query(ForensicAnalysis).filter_by(email_id=existing.id).first()
+        if db_forensic:
+            has_analysis = True
+            analysis_dict = db_forensic.analysis
+        db_email = existing
+    else:
+        # Store in database
+        db_email = Email(
+            email_account_id=email_account_id,
+            message_id=upload_id,
+            subject=parsed.subject,
+            sender=parsed.sender,
+            recipient=parsed.recipient,
+            cc=parsed.cc,
+            body_text=parsed.body_text,
+            body_html=parsed.body_html,
+            raw_headers=parsed.raw_headers,
+            received_at=parsed.received_at,
+        )
+        db.add(db_email)
+        db.commit()
+        db.refresh(db_email)
+
+    if not has_analysis:
+        # Run unified analysis pipeline
+        analysis_dict = run_email_analysis(parsed, db_email, db)
 
     forensics_result = ForensicAnalysisSchema.model_validate(analysis_dict)
 

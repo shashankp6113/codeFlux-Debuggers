@@ -1503,3 +1503,42 @@ def test_upload_invalid_email_account_id():
         )
     assert response.status_code == 404
     assert response.json()["detail"] == "EmailAccount not found"
+
+
+def test_manual_duplicate_upload():
+    from auth import create_access_token
+    test_user_token = create_access_token(1)
+    # D. Upload the same EML twice. Verify no 500 error, no duplicate row.
+    eml_content = b"Message-ID: <manual1@test>\r\nFrom: x@test\r\nTo: y@test\r\n\r\nContent"
+    
+    files1 = {"file": ("test1.eml", eml_content, "message/rfc822")}
+    resp1 = client.post("/api/emails/upload", headers={"Authorization": f"Bearer {test_user_token}"}, files=files1)
+    assert resp1.status_code == 200
+    
+    files2 = {"file": ("test1.eml", eml_content, "message/rfc822")}
+    resp2 = client.post("/api/emails/upload", headers={"Authorization": f"Bearer {test_user_token}"}, files=files2)
+    assert resp2.status_code == 200
+    
+    assert resp1.json()["id"] == resp2.json()["id"]
+
+def test_manual_distinct_messages_same_rfc_message_id():
+    from auth import create_access_token
+    test_user_token = create_access_token(1)
+    # E. Two genuinely different messages share the same RFC Message-ID.
+    eml_content_1 = b"Message-ID: <shared_id@test>\r\nFrom: a@test\r\nTo: b@test\r\n\r\nBody 1"
+    eml_content_2 = b"Message-ID: <shared_id@test>\r\nFrom: c@test\r\nTo: d@test\r\n\r\nBody 2"
+    
+    files1 = {"file": ("test1.eml", eml_content_1, "message/rfc822")}
+    resp1 = client.post("/api/emails/upload", headers={"Authorization": f"Bearer {test_user_token}"}, files=files1)
+    assert resp1.status_code == 200
+    
+    files2 = {"file": ("test2.eml", eml_content_2, "message/rfc822")}
+    resp2 = client.post("/api/emails/upload", headers={"Authorization": f"Bearer {test_user_token}"}, files=files2)
+    assert resp2.status_code == 200
+    
+    # Must be distinct DB entries because their hashes are different
+    assert resp1.json()["id"] != resp2.json()["id"]
+    
+    # Verify both preserved the RFC Message-ID in forensic payload
+    assert resp1.json()["forensics"]["identity"]["message_id"] == "<shared_id@test>"
+    assert resp2.json()["forensics"]["identity"]["message_id"] == "<shared_id@test>"

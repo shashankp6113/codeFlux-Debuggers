@@ -352,7 +352,7 @@ class TestSyncGmailMessages:
         parsed = parse_eml(SAMPLE_EML)
         db_email = Email(
             email_account_id=acct_id,
-            message_id=parsed.message_id,
+            message_id="aaa111",  # Mock list_message_ids returns aaa111
             sender=parsed.sender,
             recipient=parsed.recipient,
         )
@@ -410,7 +410,7 @@ class TestSyncGmailMessages:
         acct_id = _seed_gmail_account()
         
         # Pre-seed id1@test as a zombie
-        db_email1 = Email(email_account_id=acct_id, message_id="<id1@test>", sender="a@test", recipient="b@test")
+        db_email1 = Email(email_account_id=acct_id, message_id="aaa111", sender="a@test", recipient="b@test")
         db.add(db_email1)
         db.commit()
         
@@ -434,7 +434,7 @@ class TestSyncGmailMessages:
         assert result.skipped_duplicate == 0
         
         assert db.query(ForensicAnalysis).filter_by(email_id=db_email1.id).first() is None
-        email2 = db.query(Email).filter_by(message_id="<id2@test>").first()
+        email2 = db.query(Email).filter_by(message_id="bbb222").first()
         assert email2 is not None
         assert db.query(ForensicAnalysis).filter_by(email_id=email2.id).first() is not None
         
@@ -607,3 +607,111 @@ Just a plain body with 10.0.0.1 for IOC testing.
 """
 
 
+
+
+def test_gmail_internal_id_deduplication(monkeypatch):
+    from database import SessionLocal
+    from models import Email, ForensicAnalysis
+    import gmail_client
+    
+    # 2 messages, same RFC Message-ID but different Gmail ref IDs
+    messages = [
+        {"id": "gmail_ref_1", "threadId": "t1"},
+        {"id": "gmail_ref_2", "threadId": "t1"}
+    ]
+    raw_content = b"Message-ID: <same_id@test>\r\nFrom: a@test\r\nTo: b@test\r\n\r\nBody"
+    
+    list_resp = _FakeResp(200, {"messages": messages})
+    def _mock_get(url, **kwargs):
+        if "gmail_ref_1" in url or "gmail_ref_2" in url:
+            return _FakeResp(200, {"raw": _b64url(raw_content)})
+        if "/messages" in url:
+            return list_resp
+        return _FakeResp(404)
+        
+    monkeypatch.setattr("httpx.get", _mock_get)
+    
+    db = TestSession()
+    acct_id = _seed_gmail_account()
+    
+    result = gmail_client.sync_gmail_messages(acct_id, "tok", db, limit=5)
+    assert result.persisted == 2
+    assert result.skipped_duplicate == 0
+    
+    # Verify two distinct rows with same RFC Message-ID are saved under their ref.id
+    email1 = db.query(Email).filter_by(message_id="gmail_ref_1").first()
+    email2 = db.query(Email).filter_by(message_id="gmail_ref_2").first()
+    assert email1 is not None
+    assert email2 is not None
+    
+    # Verify forensic analysis preserved the original RFC Message-ID
+    fa1 = db.query(ForensicAnalysis).filter_by(email_id=email1.id).first()
+    fa2 = db.query(ForensicAnalysis).filter_by(email_id=email2.id).first()
+    assert fa1.analysis["identity"]["message_id"] == "<same_id@test>"
+    assert fa2.analysis["identity"]["message_id"] == "<same_id@test>"
+    db.close()
+
+def test_gmail_missing_rfc_message_id_deduplication(monkeypatch):
+    from database import SessionLocal
+    from models import Email
+    import gmail_client
+    
+    # Gmail message has no Message-ID header
+    messages = [{"id": "gmail_ref_no_rfc", "threadId": "t1"}]
+    raw_content = b"From: a@test\r\nTo: b@test\r\n\r\nBody"
+    
+    list_resp = _FakeResp(200, {"messages": messages})
+    def _mock_get(url, **kwargs):
+        if "gmail_ref_no_rfc" in url:
+            return _FakeResp(200, {"raw": _b64url(raw_content)})
+        if "/messages" in url:
+            return list_resp
+        return _FakeResp(404)
+        
+    monkeypatch.setattr("httpx.get", _mock_get)
+    
+    db = TestSession()
+    acct_id = _seed_gmail_account()
+    
+    # First sync
+    res1 = gmail_client.sync_gmail_messages(acct_id, "tok", db, limit=5)
+    assert res1.persisted == 1
+    
+    # Second sync (should correctly skip despite no RFC Message-ID)
+    res2 = gmail_client.sync_gmail_messages(acct_id, "tok", db, limit=5)
+    assert res2.skipped_duplicate == 1
+    assert res2.persisted == 0
+    
+    # Verify only one email stored under ref.id
+    emails = db.query(Email).filter_by(message_id="gmail_ref_no_rfc").all()
+    assert len(emails) == 1
+    db.close()
+
+def test_gmail_duplicate_internal_id(monkeypatch):
+    import gmail_client
+    from models import ForensicAnalysis
+    # Handled by test_duplicate_detection but adding explicit test to verify C requirement
+    _mock_gmail_api(monkeypatch)
+    db = TestSession()
+    acct_id = _seed_gmail_account()
+    
+    # Sync 1
+    res1 = gmail_client.sync_gmail_messages(acct_id, "tok", db, limit=5)
+    assert res1.persisted == 1
+    
+    calls = []
+    import analysis
+    original_run = analysis.run_email_analysis
+    def mock_run(parsed_arg, db_email_arg, db_arg):
+        calls.append(True)
+        return original_run(parsed_arg, db_email_arg, db_arg)
+    monkeypatch.setattr(analysis, "run_email_analysis", mock_run)
+    
+    # Sync 2 (duplicate ref.id)
+    res2 = gmail_client.sync_gmail_messages(acct_id, "tok", db, limit=5)
+    assert res2.skipped_duplicate == 1
+    assert res2.persisted == 0
+    
+    # Analysis must NOT have been called again!
+    assert len(calls) == 0
+    db.close()
