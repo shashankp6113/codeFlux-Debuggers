@@ -1,8 +1,26 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Inbox, AlertTriangle, Loader } from 'lucide-react';
+import { Search, Inbox, AlertTriangle, Loader, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { api } from '../lib/api';
 import UploadButton from '../components/UploadButton';
+
+function formatEmailDate(dateString) {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  const now = new Date();
+  
+  const isToday = date.getDate() === now.getDate() && 
+                  date.getMonth() === now.getMonth() && 
+                  date.getFullYear() === now.getFullYear();
+                  
+  if (isToday) {
+    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  } else if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  } else {
+    return date.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' });
+  }
+}
 
 export default function Emails() {
   const navigate = useNavigate();
@@ -34,16 +52,16 @@ export default function Emails() {
     setSearchParams(searchQuery ? { q: searchQuery } : {});
   };
 
-  const filteredEmails = emails; // Search is now server-side
+  const filteredEmails = emails;
 
   if (loading) {
     return (
-      <div>
-        <h1 className="page-title">Investigations</h1>
+      <div className="page-container">
+        <h1 className="page-title" style={{ marginBottom: '1rem' }}>Inbox</h1>
         <div className="card" style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="empty-state">
-            <Loader size={48} className="empty-state-icon" />
-            <h3>Loading emails...</h3>
+            <Loader size={48} className="empty-state-icon" style={{ opacity: 0.5 }} />
+            <h3 style={{ color: 'var(--text-primary)' }}>Loading emails...</h3>
           </div>
         </div>
       </div>
@@ -52,113 +70,113 @@ export default function Emails() {
 
   if (error) {
     return (
-      <div>
-        <h1 className="page-title">Investigations</h1>
+      <div className="page-container">
+        <h1 className="page-title" style={{ marginBottom: '1rem' }}>Inbox</h1>
         <div className="card" style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="empty-state">
             <AlertTriangle size={48} color="var(--status-critical-text)" className="empty-state-icon" />
-            <h3>Error Loading Emails</h3>
+            <h3 style={{ color: 'var(--text-primary)' }}>Error Loading Emails</h3>
             <p>{error}</p>
-            <button className="btn-primary" onClick={() => window.location.reload()}>Retry</button>
+            <button className="btn-primary" onClick={() => window.location.reload()} style={{ marginTop: '1rem' }}>Retry</button>
           </div>
         </div>
       </div>
     );
   }
 
-  return (
-    <div>
-      <h1 className="page-title">Investigations</h1>
-      
-      <div className="card">
-        <form className="search-container" onSubmit={handleSearchSubmit}>
-          <Search size={16} strokeWidth={1.5} className="search-icon" />
-          <input 
-            type="text" 
-            className="search-input" 
-            placeholder="Search by subject or sender (press Enter)..." 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-          <button type="submit" style={{ display: 'none' }}>Search</button>
-        </form>
+  // Determine if search is active but there are no actual emails at all vs just no search results
+  const noEmailsAtAll = emails.length === 0 && !q;
+  const noSearchResults = emails.length === 0 && !!q;
 
-        {filteredEmails.length === 0 ? (
+  return (
+    <div className="page-container">
+      <h1 className="page-title" style={{ marginBottom: '1rem' }}>Inbox</h1>
+      
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                {filteredEmails.length === 0 ? (
           <div className="empty-state" style={{ padding: '4rem 1rem' }}>
-            {emails.length === 0 ? (
+            {noEmailsAtAll ? (
               <>
-                <Inbox size={48} className="empty-state-icon" />
-                <h3>No emails processed</h3>
-                <p style={{ marginBottom: '1rem' }}>Upload or connect an inbox to start analyzing emails.</p>
+                <Inbox size={48} className="empty-state-icon" style={{ opacity: 0.3 }} />
+                <h3 style={{ color: 'var(--text-primary)' }}>Your inbox is empty</h3>
+                <p style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>Upload or connect an inbox to start analyzing emails.</p>
                 <UploadButton label="Upload .eml File" />
               </>
             ) : (
               <>
-                <Search size={48} className="empty-state-icon" />
-                <h3>No results found</h3>
-                <p>No emails match your search query "{searchQuery}".</p>
+                <Search size={48} className="empty-state-icon" style={{ opacity: 0.3 }} />
+                <h3 style={{ color: 'var(--text-primary)' }}>No results found</h3>
+                <p style={{ color: 'var(--text-secondary)' }}>No emails match your search query "{q}".</p>
               </>
             )}
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Subject</th>
-                  <th>Sender</th>
-                  <th>Date</th>
-                  <th>AI Classification</th>
-                  <th>Threat Risk</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredEmails.map(email => {
-                  const forensics = email.forensics || {};
-                  
-                  // AI Classification
-                  const aiClass = (forensics.ai_analysis?.classification || "unknown").toLowerCase();
-                  const isThreatClass = ["suspicious", "malicious", "phishing", "malware", "spam"].includes(aiClass);
-                  
-                  // Deterministic Threat Risk
-                  const riskLevel = (forensics.threat_score?.risk_level || "low").toLowerCase();
-                  
-                  let riskColor = 'var(--text-secondary)';
-                  if (riskLevel === 'critical') riskColor = '#dc2626';
-                  else if (riskLevel === 'high') riskColor = 'var(--status-high-text)';
-                  else if (riskLevel === 'medium') riskColor = '#eab308';
-                  else if (riskLevel === 'low') riskColor = 'var(--status-safe-text)';
+          <div className="email-list-container">
+            {filteredEmails.map(email => {
+              const forensics = email.forensics || {};
+              
+              // AI Classification
+              const aiClass = (forensics.ai_analysis?.classification || "unknown").toLowerCase();
+              const isThreatClass = ["suspicious", "malicious", "phishing", "malware", "spam"].includes(aiClass);
+              
+              // Deterministic Threat Risk
+              const riskLevel = (forensics.threat_score?.risk_level || "low").toLowerCase();
+              
+              let badgeClass = 'badge-safe';
+              let badgeText = 'Safe';
+              let Icon = ShieldCheck;
+              
+              if (riskLevel === 'critical' || isThreatClass) {
+                badgeClass = 'badge-critical';
+                badgeText = 'Critical';
+                Icon = ShieldAlert;
+              } else if (riskLevel === 'high') {
+                badgeClass = 'badge-high';
+                badgeText = 'High';
+                Icon = ShieldAlert;
+              } else if (riskLevel === 'medium') {
+                badgeClass = 'badge-medium';
+                badgeText = 'Suspicious';
+                Icon = AlertTriangle;
+              }
 
-                  return (
-                    <tr key={email.id} onClick={() => navigate(`/emails/${email.id}`)}>
-                      <td className="truncate" style={{ fontWeight: 500, maxWidth: '300px' }}>
-                        {email.subject || "(No Subject)"}
-                      </td>
-                      <td className="truncate text-muted" style={{ maxWidth: '200px' }}>
-                        {email.sender}
-                      </td>
-                      <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                        {new Date(email.received_at || email.created_at).toLocaleString()}
-                      </td>
-                      <td>
-                        <span className={`badge ${isThreatClass ? 'badge-critical' : 'badge-neutral'}`}>
-                          {aiClass}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge ${
-                          riskLevel === 'critical' ? 'badge-critical' :
-                          riskLevel === 'high' ? 'badge-high' :
-                          riskLevel === 'low' ? 'badge-safe' : 'badge-neutral'
-                        }`}>
-                          {riskLevel}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+              // Extract snippet
+              const bodySnippet = (email.body_text || '').substring(0, 150).replace(/\s+/g, ' ').trim();
+
+              return (
+                <a 
+                  key={email.id} 
+                  href={`/emails/${email.id}`}
+                  className="email-row"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate(`/emails/${email.id}`);
+                  }}
+                >
+                  <div className="email-row-sender truncate" title={email.sender}>
+                    {email.sender || "(Unknown)"}
+                  </div>
+                  
+                  <div className="email-row-content truncate">
+                    <span className="email-row-subject">{email.subject || "(No Subject)"}</span>
+                    <span className="email-row-snippet">
+                      {bodySnippet ? ` - ${bodySnippet}` : ''}
+                    </span>
+                  </div>
+                  
+                  <div className="email-row-badges">
+                    <span className={`compact-badge ${badgeClass}`} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Icon size={12} strokeWidth={2} />
+                      {badgeText}
+                    </span>
+                  </div>
+                  
+                  <div className="email-row-date">
+                    {formatEmailDate(email.received_at || email.created_at)}
+                  </div>
+                </a>
+              );
+            })}
           </div>
         )}
       </div>

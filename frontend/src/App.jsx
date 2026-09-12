@@ -8,6 +8,8 @@ import IOCs from './pages/IOCs';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
+import SearchResults from './pages/SearchResults';
+
 import ProtectedRoute from './components/ProtectedRoute';
 import { AuthProvider } from './contexts/AuthContext';
 
@@ -20,6 +22,7 @@ function App() {
           <Route element={<ProtectedRoute />}>
             <Route path="/" element={<Layout />}>
               <Route index element={<Dashboard />} />
+                            <Route path="search" element={<SearchResults />} />
               <Route path="emails" element={<Emails />} />
               <Route path="emails/:id" element={<EmailDetail />} />
               <Route path="threats" element={<ThreatAnalysis />} />

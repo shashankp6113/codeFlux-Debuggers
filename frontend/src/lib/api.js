@@ -37,6 +37,10 @@ async function fetchApi(endpoint, options = {}) {
 }
 
 export const api = {
+  globalSearch: async (query) => {
+    if (!query || query.trim() === '') return { emails: [], iocs: [], threats: [] };
+    return fetchApi(`/api/search?q=${encodeURIComponent(query)}`);
+  },
   getDashboardSummary: () => fetchApi('/api/dashboard/summary'),
   
   getEmails: (limit = 50, search = "") => fetchApi(`/api/emails?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ''}`),

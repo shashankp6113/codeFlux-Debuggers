@@ -8,8 +8,7 @@ export default function IOCs() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   
-  const [search, setSearch] = useState('');
-  const [iocType, setIocType] = useState('');
+    const [iocType, setIocType] = useState('');
   const [verdict, setVerdict] = useState('');
   
   const navigate = useNavigate();
@@ -23,7 +22,7 @@ export default function IOCs() {
     try {
       setLoading(true);
       setError(null);
-      const result = await api.getIocs({ search, ioc_type: iocType, verdict });
+      const result = await api.getIocs({ search: "", ioc_type: iocType, verdict });
       setData(result || { iocs: [], stats: {} });
     } catch (err) {
       setError(err.message || 'Failed to load IOCs');
@@ -32,7 +31,7 @@ export default function IOCs() {
     }
   };
 
-  const handleSearch = (e) => {
+  const handleFilter = (e) => {
     e.preventDefault();
     fetchIocs();
   };
@@ -84,18 +83,7 @@ export default function IOCs() {
       )}
 
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
-        <form onSubmit={handleSearch} className="toolbar">
-          <div className="search-container">
-            <Search size={16} strokeWidth={1.5} color="var(--text-secondary)" />
-            <input 
-              type="text" 
-              placeholder="Search IOC value..." 
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="search-input"
-            />
-          </div>
-          
+        <form onSubmit={handleFilter} className="toolbar">
           <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
             <Filter size={16} strokeWidth={1.5} color="var(--text-secondary)" />
             <select 
@@ -122,7 +110,7 @@ export default function IOCs() {
               <option value="unknown">Unknown</option>
             </select>
             
-            <button type="submit" className="btn-primary">Search</button>
+            <button type="submit" className="btn-secondary">Apply Filters</button>
           </div>
         </form>
       </div>

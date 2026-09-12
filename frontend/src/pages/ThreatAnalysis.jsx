@@ -8,8 +8,7 @@ export default function ThreatAnalysis() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   
-  const [search, setSearch] = useState('');
-  const [riskLevel, setRiskLevel] = useState('');
+    const [riskLevel, setRiskLevel] = useState('');
   const [classification, setClassification] = useState('');
   
   const navigate = useNavigate();
@@ -23,7 +22,7 @@ export default function ThreatAnalysis() {
     try {
       setLoading(true);
       setError(null);
-      const data = await api.getThreats({ search, risk_level: riskLevel, classification });
+      const data = await api.getThreats({ search: "", risk_level: riskLevel, classification });
       setThreats(data || []);
     } catch (err) {
       setError(err.message || 'Failed to load threats');
@@ -32,7 +31,7 @@ export default function ThreatAnalysis() {
     }
   };
 
-  const handleSearch = (e) => {
+  const handleFilter = (e) => {
     e.preventDefault();
     fetchThreats();
   };
@@ -51,18 +50,7 @@ export default function ThreatAnalysis() {
       <h1 className="page-title">Threat Analysis</h1>
       
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
-        <form onSubmit={handleSearch} className="toolbar">
-          <div className="search-container">
-            <Search size={16} strokeWidth={1.5} color="var(--text-secondary)" />
-            <input 
-              type="text" 
-              placeholder="Search sender or subject..." 
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="search-input"
-            />
-          </div>
-          
+        <form onSubmit={handleFilter} className="toolbar">
           <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
             <Filter size={16} strokeWidth={1.5} color="var(--text-secondary)" />
             <select 
@@ -89,7 +77,7 @@ export default function ThreatAnalysis() {
               <option value="spam">Spam</option>
             </select>
             
-            <button type="submit" className="btn-primary">Search</button>
+            <button type="submit" className="btn-secondary">Apply Filters</button>
           </div>
         </form>
       </div>

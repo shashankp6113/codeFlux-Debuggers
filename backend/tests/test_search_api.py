@@ -108,3 +108,46 @@ def test_search_emails(auth_client, db):
     resp3 = client.get("/api/emails")
     assert resp3.status_code == 200
     assert len(resp3.json()) == 2
+
+from models import ForensicAnalysis
+
+def test_global_search(auth_client, db):
+    client, user, account, other_account = auth_client
+    
+    # Add emails
+    e1 = Email(email_account_id=account.id, message_id="1", subject="PayPal verification", sender="scam@fake.com", recipient="x", created_at=datetime.datetime.now())
+    db.add(e1)
+    db.commit()
+    db.refresh(e1)
+
+    analysis = ForensicAnalysis(
+        email_id=e1.id,
+        analysis={
+            "threat_score": {"risk_level": "critical"},
+            "ai_analysis": {"classification": "phishing"},
+            "ioc_extraction": {
+                "iocs": [
+                    {"ioc_type": "domain", "value": "paypal-fake.com"}
+                ]
+            }
+        }
+    )
+    db.add(analysis)
+    db.commit()
+    
+    # Search should match emails, iocs, threats
+    resp = client.get("/api/search?q=paypal")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["query"] == "paypal"
+    assert len(data["emails"]) == 1
+    assert len(data["iocs"]) == 1
+    assert data["iocs"][0]["value"] == "paypal-fake.com"
+    assert len(data["threats"]) == 1
+    assert data["threats"][0]["classification"] == "phishing"
+
+    # Search for other user's stuff shouldn't leak
+    resp2 = client.get("/api/search?q=other")
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert len(data2["emails"]) == 0

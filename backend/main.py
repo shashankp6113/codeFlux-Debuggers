@@ -5,7 +5,7 @@ from dataclasses import asdict
 
 from typing import List, Optional
 
-from fastapi import FastAPI, Request, Response, Depends, File, Form, HTTPException, UploadFile, BackgroundTasks
+from fastapi import FastAPI, Request, Response, Depends, File, Form, HTTPException, UploadFile, BackgroundTasks, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -645,6 +645,118 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
         "recent_investigations": recent_responses,
         "threat_distribution": threat_dist,
         "ioc_summary": ioc_summ
+    }
+
+
+
+# ---------------------------------------------------------------------------
+# Global Search Endpoint
+# ---------------------------------------------------------------------------
+from sqlalchemy import or_, and_, cast, String
+
+@app.get("/api/search")
+def global_search(q: str = Query("", min_length=1), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Authenticated scope: we only query for this user's email accounts
+    user_account_ids = [acc.id for acc in db.query(EmailAccount.id).filter(EmailAccount.user_id == current_user.id).all()]
+    if not user_account_ids:
+        return {"query": q, "emails": [], "iocs": [], "threats": []}
+
+    search_term = f"%{q}%"
+    
+    # 1. Search Emails
+    # Matching subject, sender, recipient
+    emails = db.query(Email).filter(
+        Email.email_account_id.in_(user_account_ids),
+        or_(
+            Email.subject.ilike(search_term),
+            Email.sender.ilike(search_term),
+            Email.recipient.ilike(search_term)
+        )
+    ).order_by(Email.received_at.desc()).limit(5).all()
+    
+    email_results = []
+    for e in emails:
+        fa = db.query(ForensicAnalysisRecord).filter(ForensicAnalysisRecord.email_id == e.id).first()
+        risk = "low"
+        is_threat = False
+        if fa and fa.analysis:
+            risk = fa.analysis.get("threat_score", {}).get("risk_level", "low")
+            is_threat = fa.analysis.get("ai_analysis", {}).get("classification", "unknown").lower() in ["suspicious", "malicious", "phishing"]
+        email_results.append({
+            "id": e.id,
+            "subject": e.subject,
+            "sender": e.sender,
+            "received_at": e.received_at,
+            "risk_level": risk,
+            "is_threat": is_threat
+        })
+        
+    # 2. Search IOCs & Threats
+    # We will search the ForensicAnalysisRecord JSON manually since it's SQLite and we can't do complex JSON queries easily.
+    # Alternatively, since it's SQLite, we can just cast analysis to string and ilike, then extract matches.
+    # We will do a substring search on the JSON string representation
+    fa_records = db.query(ForensicAnalysisRecord).join(Email).filter(
+        Email.email_account_id.in_(user_account_ids)
+    ).all()
+    
+    ioc_results = []
+    threat_results = []
+    
+    q_lower = q.lower()
+    
+    for fa in fa_records:
+        if not fa.analysis:
+            continue
+            
+        # Match IOCs
+        iocs = fa.analysis.get("ioc_extraction", {}).get("iocs", [])
+        for ioc in iocs:
+            val = str(ioc.get("value", ""))
+            if q_lower in val.lower():
+                ioc_results.append({
+                    "email_id": fa.email_id,
+                    "value": val,
+                    "type": ioc.get("ioc_type", "unknown"),
+                    "associated_subject": fa.email.subject
+                })
+                
+        # Match Threats
+        ai_class = fa.analysis.get("ai_analysis", {}).get("classification", "")
+        risk = fa.analysis.get("threat_score", {}).get("risk_level", "low")
+        if q_lower in ai_class.lower() or q_lower in risk.lower() or q_lower in (fa.email.subject or "").lower() or q_lower in (fa.email.sender or "").lower():
+            if ai_class.lower() in ["suspicious", "malicious", "phishing", "malware", "spam"]:
+                threat_results.append({
+                    "email_id": fa.email_id,
+                    "classification": ai_class,
+                    "risk_level": risk,
+                    "sender": fa.email.sender,
+                    "subject": fa.email.subject
+                })
+                
+    # Deduplicate and limit
+    # Deduplicate IOCs by value
+    seen_iocs = set()
+    unique_iocs = []
+    for r in ioc_results:
+        if r["value"] not in seen_iocs:
+            seen_iocs.add(r["value"])
+            unique_iocs.append(r)
+            if len(unique_iocs) >= 5: break
+            
+    # Deduplicate threats by email_id
+    seen_threat_emails = set()
+    unique_threats = []
+    for r in threat_results:
+        if r["email_id"] not in seen_threat_emails:
+            seen_threat_emails.add(r["email_id"])
+            unique_threats.append(r)
+            if len(unique_threats) >= 5: break
+
+    return {
+        "query": q,
+        "emails": email_results,
+        "iocs": unique_iocs,
+        "threats": unique_threats
     }
 
 

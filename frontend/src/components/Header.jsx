@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
-import { Bell, Search, Settings, LogOut, ChevronDown, CheckCircle2, Menu } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Bell, Search, Settings, LogOut, ChevronDown, CheckCircle2, Menu, Mail, Activity, ShieldAlert, Loader, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
@@ -15,17 +15,23 @@ export default function Header({ toggleSidebar, collapsed }) {
   const [notifications, setNotifications] = useState([]);
   const [loadingNotifs, setLoadingNotifs] = useState(false);
 
+  // Global search state
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchTimerRef = useRef(null);
+
   const dropdownRef = useRef(null);
   const notifRef = useRef(null);
+  const searchRef = useRef(null);
   
   const initial = emailAddress ? emailAddress.charAt(0).toUpperCase() : 'U';
 
   useEffect(() => {
-    // If not on emails page, clicking search should take us there
-    if (searchParams.get('q')) {
+    // If not on search or emails page with query, maybe don't override search?
+    // Actually, if we navigate, we probably want to keep the query if we are on /search
+    if (window.location.pathname === '/search' && searchParams.get('q')) {
       setSearchQuery(searchParams.get('q'));
-    } else {
-      setSearchQuery('');
     }
   }, [searchParams]);
 
@@ -50,62 +56,224 @@ export default function Header({ toggleSidebar, collapsed }) {
     function handleClickOutside(event) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
         setDropdownOpen(false);
-        setNotifOpen(false);
       }
       if (notifRef.current && !notifRef.current.contains(event.target)) {
         setNotifOpen(false);
       }
+      if (searchRef.current && !searchRef.current.contains(event.target)) {
+        setSearchOpen(false);
+      }
     }
 
-    
     function handleEscape(event) {
       if (event.key === 'Escape') {
         setDropdownOpen(false);
         setNotifOpen(false);
+        setSearchOpen(false);
       }
     }
 
-    if (dropdownOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('keydown', handleEscape);
-    }
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
     
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [dropdownOpen]);
+  }, []);
+
+  const handleSearchChange = (e) => {
+    const val = e.target.value;
+    setSearchQuery(val);
+    
+    if (!val.trim()) {
+      setSearchOpen(false);
+      setSearchResults(null);
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+      return;
+    }
+    
+    setSearchOpen(true);
+    setSearchLoading(true);
+    
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await api.globalSearch(val);
+        setSearchResults(res);
+      } catch (err) {
+        console.error("Global search failed", err);
+        setSearchResults({ error: true });
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+  };
+
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    if (searchQuery.trim()) {
+      setSearchOpen(false);
+      navigate(`/search?q=${encodeURIComponent(searchQuery)}`);
+    }
+  };
 
   return (
-    <header className="top-header">
-      <div className="header-title text-h2" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+    <header className="top-header" style={{ backgroundColor: 'var(--bg-surface)', padding: '8px 16px', height: '64px' }}>
+      {/* LEFT: Menu button */}
+      <div className="header-left" style={{ display: 'flex', alignItems: 'center', minWidth: '120px' }}>
         <button 
           className="icon-btn" 
           onClick={toggleSidebar} 
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           aria-expanded={!collapsed}
         >
-          <Menu size={20} strokeWidth={1.5} />
+          <Menu size={24} strokeWidth={1.5} />
         </button>
       </div>
-      <div className="header-actions">
+      
+      {/* CENTER: Global Search */}
+      <div className="header-center" style={{ flex: 1, display: 'flex', justifyContent: 'center', maxWidth: '720px', padding: '0 8px', position: 'relative' }} ref={searchRef}>
         <form 
-          className="search-container" 
-          style={{ width: '250px', background: 'var(--bg-base)', border: '1px solid var(--border-base)', display: 'flex', alignItems: 'center', padding: '0 0.75rem', borderRadius: '4px' }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            navigate(searchQuery ? `/emails?q=${encodeURIComponent(searchQuery)}` : '/emails');
-          }}
+          className="search-container header-search-form" 
+          onSubmit={handleSearchSubmit}
+          style={{ width: '100%', position: 'relative' }}
         >
-          <Search size={16} strokeWidth={1.5} style={{ color: 'var(--text-secondary)' }} />
+          <button type="submit" style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 8px 0 0' }} aria-label="Search">
+            <Search size={20} strokeWidth={1.5} style={{ color: 'var(--text-secondary)' }} />
+          </button>
           <input 
             type="text" 
-            placeholder="Search emails..." 
+            placeholder="Search emails, senders, domains, IPs, URLs, or IOCs..." 
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ border: 'none', background: 'transparent', outline: 'none', color: 'var(--text-primary)', padding: '0.5rem', width: '100%', fontSize: '0.875rem' }}
+            onChange={handleSearchChange}
+            onFocus={() => { if (searchQuery.trim()) setSearchOpen(true); }}
+            className="header-search-input"
+            aria-label="Search across application"
           />
         </form>
+
+        {searchOpen && (
+          <div className="search-dropdown" style={{ 
+            position: 'absolute', 
+            top: 'calc(100% + 8px)', 
+            left: '8px', 
+            right: '8px', 
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-base)',
+            borderRadius: '12px',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.08)',
+            zIndex: 100,
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            maxHeight: '60vh'
+          }}>
+            {searchLoading ? (
+              <div style={{ padding: '2rem', display: 'flex', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+                <Loader className="animate-spin" size={24} />
+              </div>
+            ) : searchResults?.error ? (
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--status-critical-text)' }}>
+                Search failed. Please try again.
+              </div>
+            ) : searchResults ? (
+              <div style={{ overflowY: 'auto' }}>
+                {searchResults.emails?.length === 0 && searchResults.iocs?.length === 0 && searchResults.threats?.length === 0 ? (
+                  <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                    No results found for "{searchQuery}".
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ padding: '12px 16px', fontSize: '0.85rem', color: 'var(--text-secondary)', background: 'var(--bg-body)' }}>
+                      Search results
+                    </div>
+                    
+                    {searchResults.emails?.length > 0 && (
+                      <div className="search-group">
+                        <div style={{ padding: '8px 16px', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Emails</div>
+                        {searchResults.emails.map(email => (
+                          <div 
+                            key={email.id} 
+                            onClick={() => { setSearchOpen(false); navigate(`/emails/${email.id}`); }}
+                            className="dropdown-item-hover"
+                            style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', gap: '12px', alignItems: 'center' }}
+                          >
+                            <Mail size={16} color="var(--icon-muted)" style={{ flexShrink: 0 }} />
+                            <div style={{ overflow: 'hidden' }}>
+                              <div className="truncate" style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--text-primary)' }}>{email.subject || '(No Subject)'}</div>
+                              <div className="truncate" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{email.sender}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {searchResults.iocs?.length > 0 && (
+                      <div className="search-group" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                        <div style={{ padding: '8px 16px', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>IOCs</div>
+                        {searchResults.iocs.map((ioc, idx) => (
+                          <div 
+                            key={idx} 
+                            onClick={() => { setSearchOpen(false); navigate('/iocs'); }}
+                            className="dropdown-item-hover"
+                            style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', gap: '12px', alignItems: 'center' }}
+                          >
+                            <Activity size={16} color="var(--icon-muted)" style={{ flexShrink: 0 }} />
+                            <div style={{ overflow: 'hidden' }}>
+                              <div className="truncate" style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--text-primary)' }}>{ioc.value}</div>
+                              <div className="truncate" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', textTransform: 'capitalize' }}>{ioc.type}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {searchResults.threats?.length > 0 && (
+                      <div className="search-group" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                        <div style={{ padding: '8px 16px', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Threats</div>
+                        {searchResults.threats.map((threat, idx) => {
+                          const isCritical = threat.risk_level === 'critical';
+                          const color = isCritical ? 'var(--status-critical-text)' : 'var(--status-high-text)';
+                          return (
+                            <div 
+                              key={idx} 
+                              onClick={() => { setSearchOpen(false); navigate(`/emails/${threat.email_id}`); }}
+                              className="dropdown-item-hover"
+                              style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', gap: '12px', alignItems: 'center' }}
+                            >
+                              <ShieldAlert size={16} color={color} style={{ flexShrink: 0 }} />
+                              <div style={{ overflow: 'hidden' }}>
+                                <div className="truncate" style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--text-primary)', textTransform: 'capitalize' }}>{threat.classification}</div>
+                                <div className="truncate" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{threat.risk_level.toUpperCase()} Risk</div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    
+                    <div style={{ borderTop: '1px solid var(--border-base)' }}>
+                      <button 
+                        onClick={handleSearchSubmit}
+                        style={{ width: '100%', padding: '12px 16px', background: 'transparent', border: 'none', textAlign: 'left', cursor: 'pointer', color: 'var(--accent-primary)', fontSize: '0.9rem', fontWeight: 500, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                        className="dropdown-item-hover"
+                      >
+                        View all results 
+                        <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+
+      {/* RIGHT: Actions */}
+      <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: '120px', justifyContent: 'flex-end' }}>
         
         <div className="dropdown-container" ref={notifRef}>
           <button 
@@ -113,7 +281,7 @@ export default function Header({ toggleSidebar, collapsed }) {
             aria-label="Notifications"
             onClick={() => setNotifOpen(!notifOpen)}
           >
-            <Bell size={20} strokeWidth={1.5} />
+            <Bell size={24} strokeWidth={1.5} />
           </button>
           
           {notifOpen && (
@@ -146,27 +314,22 @@ export default function Header({ toggleSidebar, collapsed }) {
         </div>
 
         <button className="icon-btn" aria-label="Settings" onClick={() => navigate('/settings')}>
-          <Settings size={20} strokeWidth={1.5} />
+          <Settings size={24} strokeWidth={1.5} />
         </button>
         
         {/* Profile Dropdown */}
-        <div className="dropdown-container" ref={dropdownRef}>
+        <div className="dropdown-container" ref={dropdownRef} style={{ marginLeft: '8px' }}>
           <button 
             className={`profile-btn ${dropdownOpen ? 'active' : ''}`}
             onClick={() => setDropdownOpen(!dropdownOpen)}
             aria-label="Profile menu"
+            style={{ padding: '4px' }}
           >
-            <div className="avatar">{initial}</div>
-            {emailAddress && (
-              <span className="text-small truncate" style={{ maxWidth: '120px' }}>
-                {emailAddress}
-              </span>
-            )}
-            <ChevronDown size={16} strokeWidth={1.5} style={{ opacity: 0.5, marginLeft: '4px' }} />
+            <div className="avatar" style={{ width: '32px', height: '32px' }}>{initial}</div>
           </button>
           
           {dropdownOpen && (
-            <div className="dropdown-menu">
+            <div className="dropdown-menu" style={{ width: '300px', right: '4px', top: 'calc(100% + 4px)' }}>
               <div className="dropdown-section">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <div className="avatar" style={{ width: '40px', height: '40px', fontSize: '18px' }}>
@@ -177,7 +340,6 @@ export default function Header({ toggleSidebar, collapsed }) {
                       {emailAddress || 'User'}
                     </div>
                     <div className="text-small text-muted" style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
-                      <CheckCircle2 size={12} strokeWidth={2} style={{ color: 'var(--status-safe-text)' }} />
                       Signed in
                     </div>
                   </div>
@@ -186,19 +348,7 @@ export default function Header({ toggleSidebar, collapsed }) {
               
               <div className="dropdown-divider"></div>
               
-              <div className="dropdown-section" style={{ padding: '12px 16px' }}>
-                <div className="text-small text-muted" style={{ textTransform: 'uppercase', marginBottom: '8px', fontSize: '11px', letterSpacing: '0.05em' }}>
-                  Connected Account
-                </div>
-                <div className="text-small truncate" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--status-safe-bg)', border: '1px solid var(--status-safe-text)' }}></div>
-                  {emailAddress || 'Not connected'}
-                </div>
-              </div>
-              
-              <div className="dropdown-divider"></div>
-              
-              <button className="dropdown-item" onClick={logout}>
+              <button className="dropdown-item" onClick={logout} style={{ padding: '16px' }}>
                 <LogOut size={16} strokeWidth={1.5} />
                 Log out
               </button>
