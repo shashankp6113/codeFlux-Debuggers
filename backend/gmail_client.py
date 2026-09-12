@@ -39,6 +39,11 @@ class GmailAPIError(Exception):
     pass
 
 
+class GmailAuthError(GmailAPIError):
+    """Raised specifically for 401 Unauthorized API failures."""
+    pass
+
+
 class GmailMessageError(Exception):
     """Raised when a single message cannot be processed."""
     pass
@@ -105,7 +110,7 @@ def list_message_ids(
         raise GmailAPIError(f"Network error listing messages: {exc}")
 
     if resp.status_code == 401:
-        raise GmailAPIError("Gmail API authentication failed (401)")
+        raise GmailAuthError("Gmail API authentication failed (401)")
     if resp.status_code == 429:
         raise GmailAPIError("Gmail API rate limit exceeded (429)")
     if resp.status_code != 200:
@@ -152,7 +157,7 @@ def get_raw_message(access_token: str, message_id: str) -> bytes:
         raise GmailAPIError(f"Network error retrieving message {message_id}: {exc}")
 
     if resp.status_code == 401:
-        raise GmailAPIError("Gmail API authentication failed (401)")
+        raise GmailAuthError("Gmail API authentication failed (401)")
     if resp.status_code == 429:
         raise GmailAPIError("Gmail API rate limit exceeded (429)")
     if resp.status_code != 200:
@@ -225,6 +230,8 @@ def sync_gmail_messages(
     try:
         refs = list_message_ids(access_token, max_results=effective_limit)
         record_progress(account_id, total_discovered=len(refs))
+    except GmailAuthError:
+        raise
     except GmailAPIError as exc:
         result.errors.append(str(exc))
         return result
@@ -234,6 +241,8 @@ def sync_gmail_messages(
         try:
             raw_bytes = get_raw_message(access_token, ref.id)
             parsed = convert_raw_to_parsed(raw_bytes)
+        except GmailAuthError:
+            raise
         except (GmailAPIError, GmailMessageError) as exc:
             result.errors.append(f"Message {ref.id}: {exc}")
             record_progress(account_id, failed=1)

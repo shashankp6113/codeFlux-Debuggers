@@ -674,20 +674,45 @@ async def upload_email(
 # Gmail message retrieval endpoint
 # ---------------------------------------------------------------------------
 
-from gmail_client import sync_gmail_messages, GmailAPIError  # noqa: E402
+from gmail_client import sync_gmail_messages, GmailAPIError, GmailAuthError  # noqa: E402
 
 
 def run_sync_job(account_id: int, access_token: str, limit: int):
     from database import SessionLocal
     from gmail_client import sync_gmail_messages
+    from gmail_oauth import refresh_access_token, get_oauth_config, TokenExchangeError
+    from models import EmailAccount
     db = SessionLocal()
     try:
-        result = sync_gmail_messages(
-            account_id=account_id,
-            access_token=access_token,
-            db_session=db,
-            limit=limit,
-        )
+        try:
+            result = sync_gmail_messages(
+                account_id=account_id,
+                access_token=access_token,
+                db_session=db,
+                limit=limit,
+            )
+        except GmailAuthError:
+            # Token might be expired, attempt to refresh once
+            account = db.query(EmailAccount).filter_by(id=account_id).first()
+            if not account or not account.refresh_token:
+                raise Exception("Gmail API authentication failed (401) and no refresh token is available. Please re-authenticate.")
+            
+            config = get_oauth_config()
+            new_access, new_refresh = refresh_access_token(config, account.refresh_token)
+            
+            account.access_token = new_access
+            if new_refresh:
+                account.refresh_token = new_refresh
+            db.commit()
+            
+            # Retry sync once
+            result = sync_gmail_messages(
+                account_id=account_id,
+                access_token=new_access,
+                db_session=db,
+                limit=limit,
+            )
+
         if result.errors:
             finish_sync(account_id, status="completed", errors=result.errors)
         else:

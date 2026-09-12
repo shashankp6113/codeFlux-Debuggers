@@ -195,6 +195,54 @@ class UserInfoError(Exception):
     pass
 
 
+
+def refresh_access_token(config: OAuthConfig, refresh_token: str) -> tuple[str, str]:
+    """Exchange a refresh token for a new access token.
+
+    Args:
+        config: OAuth application credentials.
+        refresh_token: The user's stored refresh token.
+
+    Returns:
+        A tuple of (new_access_token, optional_new_refresh_token).
+
+    Raises:
+        TokenExchangeError: If the refresh fails or the response is malformed.
+    """
+    import httpx
+
+    if not refresh_token:
+        raise TokenExchangeError("No refresh token available.")
+
+    try:
+        resp = httpx.post(
+            _GOOGLE_TOKEN_URL,
+            data={
+                "client_id": config.client_id,
+                "client_secret": config.client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+            timeout=15.0,
+        )
+    except Exception as exc:
+        raise TokenExchangeError(f"Network error during token refresh: {exc}")
+
+    if resp.status_code != 200:
+        raise TokenExchangeError(f"Token refresh failed with HTTP {resp.status_code}")
+
+    try:
+        data = resp.json()
+    except Exception:
+        raise TokenExchangeError("Invalid JSON response from token endpoint.")
+
+    access_token = data.get("access_token")
+    if not access_token:
+        raise TokenExchangeError("Token endpoint response missing 'access_token'.")
+
+    return access_token, data.get("refresh_token")
+
+
 def get_gmail_user_email(access_token: str) -> str:
     """Fetch the authenticated user's email address from Google.
 

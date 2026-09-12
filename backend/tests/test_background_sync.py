@@ -1,3 +1,9 @@
+import os
+os.environ.setdefault("POSTGRES_USER", "x")
+os.environ.setdefault("POSTGRES_PASSWORD", "x")
+os.environ.setdefault("POSTGRES_HOST", "x")
+os.environ.setdefault("POSTGRES_PORT", "5432")
+
 import pytest
 from fastapi.testclient import TestClient
 from main import app
@@ -119,3 +125,144 @@ def test_fixture_isolation(db_session):
     """Verify the test uses SQLite in-memory, not Postgres."""
     assert TEST_ENGINE.url.drivername == "sqlite"
     assert "postgres" not in str(TEST_ENGINE.url)
+
+
+def test_sync_refreshes_expired_access_token(db_session, test_user, monkeypatch):
+    import main
+    from gmail_client import GmailAuthError, GmailSyncResult
+    import database
+    
+    # Setup account with refresh token
+    acc = EmailAccount(user_id=test_user.id, provider="gmail", email_address="ref@test", access_token="expired", refresh_token="valid_rt")
+    db_session.add(acc)
+    db_session.commit()
+    db_session.refresh(acc)
+    
+    calls = []
+    def mock_sync(account_id, access_token, db_session, limit):
+        calls.append(access_token)
+        if access_token == "expired":
+            raise GmailAuthError("401")
+        return GmailSyncResult()
+        
+    def mock_refresh(config, refresh_token):
+        assert refresh_token == "valid_rt"
+        return "new_access", "new_rt"
+        
+    def mock_config():
+        return None
+
+    class DummySession:
+        def __init__(self, s):
+            self._s = s
+        def __getattr__(self, name):
+            return getattr(self._s, name)
+        def close(self):
+            pass
+            
+    import gmail_client
+    monkeypatch.setattr(gmail_client, "sync_gmail_messages", mock_sync)
+    monkeypatch.setattr(database, "SessionLocal", lambda: DummySession(db_session))
+    
+    import gmail_oauth
+    monkeypatch.setattr(gmail_oauth, "refresh_access_token", mock_refresh)
+    monkeypatch.setattr(gmail_oauth, "get_oauth_config", mock_config)
+    
+    acc_id = acc.id
+    start_sync(acc_id)
+    main.run_sync_job(acc_id, "expired", 5)
+    
+    assert len(calls) == 2
+    assert calls[0] == "expired"
+    assert calls[1] == "new_access"
+    
+    db_session.refresh(acc)
+    assert acc.access_token == "new_access"
+    assert acc.refresh_token == "new_rt"
+    
+    status = get_sync_status(acc_id)
+    assert status.status == "completed"
+
+def test_sync_does_not_retry_401_more_than_once(db_session, test_user, monkeypatch):
+    import main
+    from gmail_client import GmailAuthError
+    import database
+    
+    acc = EmailAccount(user_id=test_user.id, provider="gmail", email_address="ref@test", access_token="expired", refresh_token="valid_rt")
+    db_session.add(acc)
+    db_session.commit()
+    db_session.refresh(acc)
+    
+    calls = []
+    def mock_sync(account_id, access_token, db_session, limit):
+        calls.append(access_token)
+        raise GmailAuthError("401")
+        
+    def mock_refresh(config, refresh_token):
+        return "new_access", "new_rt"
+        
+    def mock_config():
+        return None
+        
+    class DummySession:
+        def __init__(self, s):
+            self._s = s
+        def __getattr__(self, name):
+            return getattr(self._s, name)
+        def close(self):
+            pass
+
+    import gmail_client
+    monkeypatch.setattr(gmail_client, "sync_gmail_messages", mock_sync)
+    monkeypatch.setattr(database, "SessionLocal", lambda: DummySession(db_session))
+    
+    import gmail_oauth
+    monkeypatch.setattr(gmail_oauth, "refresh_access_token", mock_refresh)
+    monkeypatch.setattr(gmail_oauth, "get_oauth_config", mock_config)
+    
+    acc_id = acc.id
+    start_sync(acc_id)
+    main.run_sync_job(acc_id, "expired", 5)
+    
+    assert len(calls) == 2
+    
+    status = get_sync_status(acc_id)
+    assert status.status == "failed"
+    assert "401" in status.errors[0]
+
+def test_sync_without_refresh_token(db_session, test_user, monkeypatch):
+    import main
+    from gmail_client import GmailAuthError
+    import database
+    
+    acc = EmailAccount(user_id=test_user.id, provider="gmail", email_address="ref@test", access_token="expired", refresh_token=None)
+    db_session.add(acc)
+    db_session.commit()
+    db_session.refresh(acc)
+    
+    calls = []
+    def mock_sync(account_id, access_token, db_session, limit):
+        calls.append(access_token)
+        raise GmailAuthError("401")
+        
+    class DummySession:
+        def __init__(self, s):
+            self._s = s
+        def __getattr__(self, name):
+            return getattr(self._s, name)
+        def close(self):
+            pass
+
+    import gmail_client
+    monkeypatch.setattr(gmail_client, "sync_gmail_messages", mock_sync)
+    monkeypatch.setattr(database, "SessionLocal", lambda: DummySession(db_session))
+    
+    acc_id = acc.id
+    start_sync(acc_id)
+    main.run_sync_job(acc_id, "expired", 5)
+    
+    assert len(calls) == 1
+    
+    status = get_sync_status(acc_id)
+    assert status.status == "failed"
+    assert "no refresh token is available" in status.errors[0]

@@ -619,3 +619,55 @@ class TestOAuthCSRF:
         assert "oauth_state=" in cookie_header
         assert "Max-Age=0" in cookie_header or "expires=" in cookie_header.lower()
 
+
+def test_refresh_access_token_success(monkeypatch):
+    from gmail_oauth import refresh_access_token, OAuthConfig
+    config = OAuthConfig(client_id="cid", client_secret="csec", redirect_uri="uri")
+    
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"access_token": "new-acc", "refresh_token": "new-ref"}
+            
+    def mock_post(url, data, **kwargs):
+        assert data["grant_type"] == "refresh_token"
+        assert data["refresh_token"] == "old-ref"
+        assert data["client_id"] == "cid"
+        assert data["client_secret"] == "csec"
+        return FakeResp()
+        
+    monkeypatch.setattr("httpx.post", mock_post)
+    
+    acc, ref = refresh_access_token(config, "old-ref")
+    assert acc == "new-acc"
+    assert ref == "new-ref"
+
+def test_refresh_access_token_failure(monkeypatch):
+    from gmail_oauth import refresh_access_token, OAuthConfig, TokenExchangeError
+    config = OAuthConfig(client_id="cid", client_secret="csec", redirect_uri="uri")
+    
+    # Missing refresh token
+    with pytest.raises(TokenExchangeError, match="No refresh token available"):
+        refresh_access_token(config, "")
+        
+    class FakeRespError:
+        status_code = 400
+        
+    def mock_post_err(*args, **kwargs):
+        return FakeRespError()
+        
+    monkeypatch.setattr("httpx.post", mock_post_err)
+    with pytest.raises(TokenExchangeError, match="HTTP 400"):
+        refresh_access_token(config, "old")
+        
+    class FakeRespMalformed:
+        status_code = 200
+        def json(self):
+            return {"not_access_token": "x"}
+            
+    def mock_post_mal(*args, **kwargs):
+        return FakeRespMalformed()
+        
+    monkeypatch.setattr("httpx.post", mock_post_mal)
+    with pytest.raises(TokenExchangeError, match="missing 'access_token'"):
+        refresh_access_token(config, "old")
