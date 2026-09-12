@@ -17,16 +17,20 @@ export default function EmailDetail() {
     async function loadEmail() {
       try {
         setLoading(true);
-        // Fetch all emails (since we have no specific GET /api/emails/:id yet)
-        const data = await api.getEmails(100);
-        const found = data?.find(e => String(e.id) === String(id));
-        if (!found) {
+        const data = await api.getEmail(id);
+        if (!data) {
           setError("Email not found.");
         } else {
-          setEmail(found);
+          setEmail(data);
         }
       } catch (err) {
-        setError(err.message || "Failed to load email.");
+        if (err.message && err.message.includes('404')) {
+           setError("Email not found.");
+        } else if (err.message && err.message.includes('401')) {
+           setError("Unauthorized to view this email.");
+        } else {
+           setError(err.message || "Failed to load email.");
+        }
       } finally {
         setLoading(false);
       }
@@ -114,7 +118,11 @@ export default function EmailDetail() {
                 <AlertTriangle size={20} />
                 <div>
                   <strong>AI Analysis Unavailable</strong>
-                  <div style={{ fontSize: '0.9rem', marginTop: '0.25rem' }}>The AI provider failed to analyze this email. This may be due to rate limits or configuration issues.</div>
+                  <div style={{ fontSize: '0.9rem', marginTop: '0.25rem' }}>
+                    {ai.error_category === "quota_exceeded"
+                      ? "The daily AI analysis quota for this prototype has been reached. Please try again after the quota resets."
+                      : "The AI provider failed to analyze this email. This may be due to rate limits or configuration issues."}
+                  </div>
                 </div>
               </div>
             ) : (

@@ -103,6 +103,7 @@ def run_email_analysis(
         "recommended_actions": ai_result.recommended_actions,
         "provider": ai_result.provider,
         "error": ai_result.error,
+        "error_category": getattr(ai_result, "error_category", None),
     }
 
     # 7. Persist ForensicAnalysis

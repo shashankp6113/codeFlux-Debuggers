@@ -1380,7 +1380,7 @@ class TestUploadAIAnalysis:
         ai = r.json()["forensics"]["ai_analysis"]
         allowed = {
             "classification", "confidence", "summary", "explanation",
-            "recommended_actions", "provider", "error",
+            "recommended_actions", "provider", "error", "error_category",
         }
         assert set(ai.keys()) == allowed
 

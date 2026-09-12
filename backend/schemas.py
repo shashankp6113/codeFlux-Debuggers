@@ -173,6 +173,7 @@ class EnrichmentResultSchema(BaseModel):
     provider: str = ""
     raw_data: Optional[dict] = None
     error: Optional[str] = None
+    error_category: Optional[str] = None
 
 
 class ThreatIntelResultSchema(BaseModel):
@@ -197,6 +198,7 @@ class GeolocationResultSchema(BaseModel):
     organization: Optional[str] = None
     provider: str = ""
     error: Optional[str] = None
+    error_category: Optional[str] = None
 
 
 class GeolocationBatchResultSchema(BaseModel):
@@ -217,6 +219,7 @@ class AIAnalysisSchema(BaseModel):
     recommended_actions: List[str] = []
     provider: str = ""
     error: Optional[str] = None
+    error_category: Optional[str] = None
 
 
 class ForensicAnalysisSchema(BaseModel):
@@ -267,3 +270,36 @@ class DashboardSummarySchema(BaseModel):
     threat_distribution: dict
     ioc_summary: dict
 
+
+class ThreatSummaryResponse(BaseModel):
+    """Summarized threat information for the Threat Analysis page."""
+    id: int
+    subject: Optional[str] = None
+    sender: str
+    received_at: Optional[datetime] = None
+    threat_score: int
+    risk_level: str
+    classification: str
+    confidence: Optional[float] = None
+    flag_count: int
+    ioc_count: int
+
+class AggregatedIOCSchema(BaseModel):
+    """Aggregated IOC information across a user's emails."""
+    ioc_type: str
+    value: str
+    occurrence_count: int
+    associated_email_count: int
+    latest_email_id: int
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    verdict: str = "unknown"
+    confidence: Optional[float] = None
+    country: Optional[str] = None
+    asn: Optional[str] = None
+    organization: Optional[str] = None
+
+class IOCsPageResponse(BaseModel):
+    """Response schema for the IOCs page."""
+    iocs: List[AggregatedIOCSchema]
+    stats: dict
