@@ -27,6 +27,7 @@ os.environ.setdefault("GEOLOCATION_PROVIDER", "noop")
 from models import Base, User, EmailAccount, Email, ForensicAnalysis as ForensicAnalysisRecord
 from database import get_db
 from main import app
+from auth import create_access_token
 
 
 def override_get_db():
@@ -128,13 +129,13 @@ class TestDashboardAPI:
 
     def test_get_emails_empty(self):
         """GET /api/emails returns empty list when no data."""
-        r = client.get("/api/emails")
+        r = client.get("/api/emails", headers={"Authorization": f"Bearer {create_access_token(1)}"})
         assert r.status_code == 200
         assert r.json() == []
         
     def test_get_dashboard_empty(self):
         """GET /api/dashboard/summary handles empty database."""
-        r = client.get("/api/dashboard/summary")
+        r = client.get("/api/dashboard/summary", headers={"Authorization": f"Bearer {create_access_token(1)}"})
         assert r.status_code == 200
         data = r.json()
         assert data["total_emails"] == 0
@@ -176,7 +177,7 @@ class TestDashboardAPI:
         
         db.close()
         
-        r = client.get("/api/dashboard/summary")
+        r = client.get("/api/dashboard/summary", headers={"Authorization": f"Bearer {create_access_token(1)}"})
         assert r.status_code == 200
         data = r.json()
         
@@ -204,7 +205,7 @@ class TestDashboardAPI:
             _create_mock_email(db, account.id, f"Msg {i}", "low", "benign")
         db.close()
         
-        r = client.get("/api/emails?limit=5")
+        r = client.get("/api/emails?limit=5", headers={"Authorization": f"Bearer {create_access_token(1)}"})
         assert r.status_code == 200
         data = r.json()
         

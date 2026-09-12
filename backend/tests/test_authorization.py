@@ -102,7 +102,7 @@ def test_user_b_sees_only_user_b_emails():
 def test_user_a_cannot_use_user_b_account_for_sync(monkeypatch):
     monkeypatch.setattr("main.sync_gmail_messages", lambda *a, **kw: None)
     token = create_access_token(1)
-    r = client.get("/api/gmail/2/messages", headers={"Authorization": f"Bearer {token}"})
+    r = client.post("/api/gmail/2/messages", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 404
     assert r.json()["detail"] == "EmailAccount not found"
 

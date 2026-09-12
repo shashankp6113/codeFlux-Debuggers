@@ -351,16 +351,24 @@ class TestGmailCallbackEndpoint:
 
     def test_successful_callback(self, monkeypatch):
         _mock_successful_flow(monkeypatch)
-        r = client.get("/api/auth/gmail/callback?code=test-auth-code")
+        r = client.get("/api/auth/gmail/callback?code=test-auth-code&state=test-state", cookies={"oauth_state": "test-state"})
         assert r.status_code == 200
         data = r.json()
         assert data["message"] == "Gmail account authorized successfully"
         assert data["email_address"] == "user@gmail.com"
         assert data["provider"] == "gmail"
-
+        assert "token" in data
+        assert "user_id" in data
+        assert "access_token" not in data
+        assert "refresh_token" not in data
+        
+        import jwt
+        from auth import JWT_SECRET_KEY, JWT_ALGORITHM
+        payload = jwt.decode(data["token"], JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        assert payload["sub"] == str(data["user_id"])
     def test_creates_email_account(self, monkeypatch):
         _mock_successful_flow(monkeypatch)
-        client.get("/api/auth/gmail/callback?code=test-auth-code")
+        client.get("/api/auth/gmail/callback?code=test-auth-code&state=test-state", cookies={"oauth_state": "test-state"})
         db = TestSession()
         account = db.query(EmailAccount).filter_by(
             provider="gmail",
@@ -373,7 +381,7 @@ class TestGmailCallbackEndpoint:
 
     def test_creates_user(self, monkeypatch):
         _mock_successful_flow(monkeypatch)
-        client.get("/api/auth/gmail/callback?code=test-auth-code")
+        client.get("/api/auth/gmail/callback?code=test-auth-code&state=test-state", cookies={"oauth_state": "test-state"})
         db = TestSession()
         user = db.query(User).filter_by(email="user@gmail.com").first()
         assert user is not None
@@ -383,7 +391,7 @@ class TestGmailCallbackEndpoint:
         """Re-authorizing updates tokens on the existing account."""
         _mock_successful_flow(monkeypatch)
         # First auth
-        r1 = client.get("/api/auth/gmail/callback?code=test-auth-code")
+        r1 = client.get("/api/auth/gmail/callback?code=test-auth-code&state=test-state", cookies={"oauth_state": "test-state"})
         account_id = r1.json()["email_account_id"]
 
         # Update mock with new tokens
@@ -395,7 +403,7 @@ class TestGmailCallbackEndpoint:
         monkeypatch.setattr("httpx.post", lambda *a, **kw: new_token_resp)
 
         # Second auth
-        r2 = client.get("/api/auth/gmail/callback?code=test-auth-code-2")
+        r2 = client.get("/api/auth/gmail/callback?code=test-auth-code-2&state=test-state", cookies={"oauth_state": "test-state"})
         assert r2.json()["email_account_id"] == account_id
 
         # Verify tokens updated
@@ -407,7 +415,7 @@ class TestGmailCallbackEndpoint:
 
     def test_error_param_returns_400(self, monkeypatch):
         _set_oauth_env(monkeypatch)
-        r = client.get("/api/auth/gmail/callback?error=access_denied")
+        r = client.get("/api/auth/gmail/callback?error=access_denied&state=test-state", cookies={"oauth_state": "test-state"})
         assert r.status_code == 400
         assert "access_denied" in r.json()["detail"]
 
@@ -424,18 +432,18 @@ class TestGmailCallbackEndpoint:
             "error_description": "Code expired",
         })
         monkeypatch.setattr("httpx.post", lambda *a, **kw: token_resp)
-        r = client.get("/api/auth/gmail/callback?code=bad-code")
+        r = client.get("/api/auth/gmail/callback?code=bad-code&state=test-state", cookies={"oauth_state": "test-state"})
         assert r.status_code == 400
 
     def test_missing_config_returns_500(self, monkeypatch):
         _clear_oauth_env(monkeypatch)
-        r = client.get("/api/auth/gmail/callback?code=test-code")
+        r = client.get("/api/auth/gmail/callback?code=test-code&state=test-state", cookies={"oauth_state": "test-state"})
         assert r.status_code == 500
 
     def test_tokens_not_in_response(self, monkeypatch):
         """Access and refresh tokens must NEVER be in the API response."""
         _mock_successful_flow(monkeypatch)
-        r = client.get("/api/auth/gmail/callback?code=test-auth-code")
+        r = client.get("/api/auth/gmail/callback?code=test-auth-code&state=test-state", cookies={"oauth_state": "test-state"})
         body = json.dumps(r.json())
         assert "ya29" not in body
         assert "test-access" not in body
@@ -445,12 +453,12 @@ class TestGmailCallbackEndpoint:
 
     def test_provider_is_gmail(self, monkeypatch):
         _mock_successful_flow(monkeypatch)
-        r = client.get("/api/auth/gmail/callback?code=test-auth-code")
+        r = client.get("/api/auth/gmail/callback?code=test-auth-code&state=test-state", cookies={"oauth_state": "test-state"})
         assert r.json()["provider"] == "gmail"
 
     def test_has_email_account_id(self, monkeypatch):
         _mock_successful_flow(monkeypatch)
-        r = client.get("/api/auth/gmail/callback?code=test-auth-code")
+        r = client.get("/api/auth/gmail/callback?code=test-auth-code&state=test-state", cookies={"oauth_state": "test-state"})
         assert "email_account_id" in r.json()
         assert isinstance(r.json()["email_account_id"], int)
 
@@ -495,11 +503,11 @@ class TestAccountIsolation:
 
     def test_two_addresses_create_separate_users(self, monkeypatch):
         self._mock_flow_for(monkeypatch, "alice@gmail.com", "tok-alice")
-        r1 = client.get("/api/auth/gmail/callback?code=code-a")
+        r1 = client.get("/api/auth/gmail/callback?code=code-a&state=test-state", cookies={"oauth_state": "test-state"})
         assert r1.status_code == 200
 
         self._mock_flow_for(monkeypatch, "bob@gmail.com", "tok-bob")
-        r2 = client.get("/api/auth/gmail/callback?code=code-b")
+        r2 = client.get("/api/auth/gmail/callback?code=code-b&state=test-state", cookies={"oauth_state": "test-state"})
         assert r2.status_code == 200
 
         db = TestSession()
@@ -512,10 +520,10 @@ class TestAccountIsolation:
 
     def test_two_addresses_create_separate_accounts(self, monkeypatch):
         self._mock_flow_for(monkeypatch, "alice@gmail.com", "tok-alice")
-        r1 = client.get("/api/auth/gmail/callback?code=code-a")
+        r1 = client.get("/api/auth/gmail/callback?code=code-a&state=test-state", cookies={"oauth_state": "test-state"})
 
         self._mock_flow_for(monkeypatch, "bob@gmail.com", "tok-bob")
-        r2 = client.get("/api/auth/gmail/callback?code=code-b")
+        r2 = client.get("/api/auth/gmail/callback?code=code-b&state=test-state", cookies={"oauth_state": "test-state"})
 
         assert r1.json()["email_account_id"] != r2.json()["email_account_id"]
 
@@ -523,13 +531,13 @@ class TestAccountIsolation:
         """Re-authorizing alice does NOT touch bob's tokens."""
         # Create both
         self._mock_flow_for(monkeypatch, "alice@gmail.com", "tok-alice-1")
-        client.get("/api/auth/gmail/callback?code=code-a1")
+        client.get("/api/auth/gmail/callback?code=code-a1&state=test-state", cookies={"oauth_state": "test-state"})
         self._mock_flow_for(monkeypatch, "bob@gmail.com", "tok-bob")
-        client.get("/api/auth/gmail/callback?code=code-b")
+        client.get("/api/auth/gmail/callback?code=code-b&state=test-state", cookies={"oauth_state": "test-state"})
 
         # Re-auth alice with new token
         self._mock_flow_for(monkeypatch, "alice@gmail.com", "tok-alice-2")
-        client.get("/api/auth/gmail/callback?code=code-a2")
+        client.get("/api/auth/gmail/callback?code=code-a2&state=test-state", cookies={"oauth_state": "test-state"})
 
         db = TestSession()
         alice_acct = db.query(EmailAccount).filter_by(
@@ -548,7 +556,7 @@ class TestAccountIsolation:
     def test_account_scoped_to_user_id(self, monkeypatch):
         """EmailAccount lookup is scoped by user_id — isolation guarantee."""
         self._mock_flow_for(monkeypatch, "alice@gmail.com", "tok-alice")
-        r = client.get("/api/auth/gmail/callback?code=code-a")
+        r = client.get("/api/auth/gmail/callback?code=code-a&state=test-state", cookies={"oauth_state": "test-state"})
 
         db = TestSession()
         alice_acct = db.query(EmailAccount).filter_by(
@@ -557,3 +565,57 @@ class TestAccountIsolation:
         alice_user = db.query(User).filter_by(email="alice@gmail.com").first()
         assert alice_acct.user_id == alice_user.id
         db.close()
+
+
+class TestOAuthCSRF:
+    def test_redirect_sets_cookie_and_state(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-id")
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
+        monkeypatch.setenv("GOOGLE_REDIRECT_URI", "http://test")
+        
+        r = client.get("/api/auth/gmail", follow_redirects=False)
+        assert r.status_code == 307
+        
+        # Check cookie
+        assert "oauth_state" in r.cookies
+        cookie_val = r.cookies["oauth_state"]
+        
+        # Check URL
+        loc = r.headers["Location"]
+        assert f"state={cookie_val}" in loc
+        
+    def test_callback_without_cookie_fails(self, monkeypatch):
+        from fastapi.testclient import TestClient
+        from main import app
+        fresh_client = TestClient(app)
+        r = fresh_client.get("/api/auth/gmail/callback?code=test&state=test-state")
+        assert r.status_code == 400
+        assert "Missing or expired OAuth state cookie" in r.json()["detail"]
+
+    def test_callback_without_state_param_fails(self, monkeypatch):
+        r = client.get("/api/auth/gmail/callback?code=test", cookies={"oauth_state": "test-state"})
+        assert r.status_code == 400
+        assert "Missing OAuth state parameter" in r.json()["detail"]
+
+    def test_callback_mismatched_state_fails(self, monkeypatch):
+        r = client.get("/api/auth/gmail/callback?code=test&state=wrong-state", cookies={"oauth_state": "test-state"})
+        assert r.status_code == 400
+        assert "Invalid OAuth state parameter" in r.json()["detail"]
+
+    def test_callback_clears_cookie_on_success(self, monkeypatch):
+        
+        _mock_successful_flow(monkeypatch)
+        r = client.get("/api/auth/gmail/callback?code=test&state=test-state", cookies={"oauth_state": "test-state"})
+        assert r.status_code == 200
+        # Cookie is cleared
+        cookie_header = r.headers.get("set-cookie", "")
+        assert "oauth_state=" in cookie_header
+        assert "Max-Age=0" in cookie_header or "expires=" in cookie_header.lower()
+
+    def test_callback_clears_cookie_on_error(self, monkeypatch):
+        r = client.get("/api/auth/gmail/callback?code=test&state=wrong", cookies={"oauth_state": "test-state"})
+        assert r.status_code == 400
+        cookie_header = r.headers.get("set-cookie", "")
+        assert "oauth_state=" in cookie_header
+        assert "Max-Age=0" in cookie_header or "expires=" in cookie_header.lower()
+

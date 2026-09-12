@@ -3,6 +3,7 @@
 import os
 import pytest
 from fastapi.testclient import TestClient
+from auth import create_access_token
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -108,6 +109,7 @@ class TestUploadForensics:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -288,6 +290,7 @@ class TestUploadPersistsForensic:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -339,6 +342,7 @@ class TestUploadThreatScore:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -409,6 +413,7 @@ class TestSampleEmlThreatScore:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -452,6 +457,7 @@ class TestThreatScorePersistence:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -539,6 +545,7 @@ class TestUploadIOCExtraction:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -600,6 +607,7 @@ class TestSampleEmlIOCContent:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -665,6 +673,7 @@ class TestIOCPersistence:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -741,6 +750,7 @@ class TestMinimalEmailIOC:
         )
         return client.post(
             "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
             files={"file": ("minimal.eml", minimal_eml, "message/rfc822")},
             data={"email_account_id": "1"},
         )
@@ -787,6 +797,7 @@ class TestUploadThreatIntelligence:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -865,6 +876,7 @@ class TestSampleEmlThreatIntel:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -946,6 +958,7 @@ class TestThreatIntelPersistence:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
                 data={"email_account_id": "1"},
             )
@@ -1030,6 +1043,7 @@ class TestUploadNoHeaderForensics:
         import io
         return client.post(
             "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
             data={"email_account_id": 1},
             files={"file": ("test.eml", io.BytesIO(eml_bytes), "message/rfc822")},
         )
@@ -1112,6 +1126,7 @@ class TestUploadProviderIntegration:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 data={"email_account_id": 1},
                 files={"file": ("test.eml", f, "message/rfc822")},
             )
@@ -1142,7 +1157,7 @@ class TestUploadProviderIntegration:
                 def raise_for_status(self):
                     pass
             return _Resp()
-        monkeypatch.setattr("httpx.get", _mock_get)
+        monkeypatch.setattr("httpx.Client.get", _mock_get)
         r = self._upload()
         assert r.status_code == 200
         ti = r.json()["forensics"]["threat_intelligence"]
@@ -1180,7 +1195,7 @@ class TestUploadProviderIntegration:
                 def raise_for_status(self):
                     pass
             return _Resp()
-        monkeypatch.setattr("httpx.get", _mock_get)
+        monkeypatch.setattr("httpx.Client.get", _mock_get)
         r = self._upload()
         assert r.status_code == 200
         # If there are enrichable IOCs, httpx.get should have been called
@@ -1200,6 +1215,7 @@ class TestUploadGeolocation:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 data={"email_account_id": 1},
                 files={"file": ("test.eml", f, "message/rfc822")},
             )
@@ -1208,6 +1224,7 @@ class TestUploadGeolocation:
         import io
         return client.post(
             "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
             data={"email_account_id": 1},
             files={"file": ("test.eml", io.BytesIO(eml_bytes), "message/rfc822")},
         )
@@ -1322,6 +1339,7 @@ class TestUploadAIAnalysis:
         with open(SAMPLE_EML, "rb") as f:
             return client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 data={"email_account_id": 1},
                 files={"file": ("test.eml", f, "message/rfc822")},
             )
@@ -1330,6 +1348,7 @@ class TestUploadAIAnalysis:
         import io
         return client.post(
             "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
             data={"email_account_id": 1},
             files={"file": ("test.eml", io.BytesIO(eml_bytes), "message/rfc822")},
         )
@@ -1438,6 +1457,7 @@ def test_upload_with_ai_failure():
         with open(sample_path, "rb") as f:
             response = client.post(
                 "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
                 files={"file": ("sample.eml", f, "message/rfc822")},
             )
             
@@ -1455,6 +1475,7 @@ def test_upload_missing_email_account_id():
     with open(sample_path, "rb") as f:
         response = client.post(
             "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
             files={"file": ("sample.eml", f, "message/rfc822")},
             # No data={"email_account_id": ...}
         )
@@ -1467,7 +1488,7 @@ def test_upload_missing_email_account_id():
     account = db.query(EmailAccount).filter_by(id=data["email_account_id"]).first()
     assert account is not None
     assert account.provider == "manual_upload"
-    assert account.email_address == "upload@mailforensics.local"
+    assert account.email_address == "upload_1@mailforensics.local"
     db.close()
 
 def test_upload_invalid_email_account_id():
@@ -1476,6 +1497,7 @@ def test_upload_invalid_email_account_id():
     with open(sample_path, "rb") as f:
         response = client.post(
             "/api/emails/upload",
+                headers={"Authorization": f"Bearer {create_access_token(1)}"},
             files={"file": ("sample.eml", f, "message/rfc822")},
             data={"email_account_id": "99999"},
         )
