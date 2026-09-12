@@ -35,7 +35,7 @@ async function fetchApi(endpoint, options = {}) {
 export const api = {
   getDashboardSummary: () => fetchApi('/api/dashboard/summary'),
   getEmails: (limit = 50) => fetchApi(`/api/emails?limit=${limit}`),
-  syncGmail: (emailAccountId, limit = 10) => fetchApi(`/api/gmail/${emailAccountId}/messages?limit=${limit}`),
+  syncGmail: (emailAccountId, limit = 50) => fetchApi(`/api/gmail/${emailAccountId}/messages?limit=${limit}`),
   uploadEmail: async (file) => {
     const formData = new FormData();
     formData.append("file", file);

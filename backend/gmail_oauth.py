@@ -29,7 +29,7 @@ from urllib.parse import urlencode
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 _GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-_GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
+_GMAIL_PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +207,7 @@ def get_gmail_user_email(access_token: str) -> str:
 
     try:
         resp = httpx.get(
-            _GOOGLE_USERINFO_URL,
+            _GMAIL_PROFILE_URL,
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=15,
         )
@@ -220,8 +220,8 @@ def get_gmail_user_email(access_token: str) -> str:
         )
 
     data = resp.json()
-    email = data.get("email")
+    email = data.get("emailAddress")
     if not email:
-        raise UserInfoError("User info response missing email address")
+        raise UserInfoError("Gmail profile response missing emailAddress")
 
     return email

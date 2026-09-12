@@ -31,7 +31,7 @@ export default function Dashboard() {
   const handleGmailConnect = async (account) => {
     try {
       setSyncing(true);
-      await api.syncGmail(account.email_account_id, 10);
+      await api.syncGmail(account.email_account_id, 50);
       const summary = await api.getDashboardSummary();
       setData(summary);
     } catch (err) {

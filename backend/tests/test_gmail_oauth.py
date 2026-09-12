@@ -180,6 +180,7 @@ class TestAuthorizationURL:
         config = get_oauth_config()
         url = build_authorization_url(config)
         assert "gmail.readonly" in url
+        
 
     def test_scope_is_readonly(self, monkeypatch):
         _set_oauth_env(monkeypatch)
@@ -267,11 +268,11 @@ class TestTokenExchange:
 # Tests: User identity (unit)
 # ---------------------------------------------------------------------------
 
-class TestGetGmailUserEmail:
+class TestGetGmailProfileEmail:
     """get_gmail_user_email() with mocked HTTP."""
 
     def test_returns_email(self, monkeypatch):
-        resp = _FakeHTTPResponse(200, {"email": "user@gmail.com"})
+        resp = _FakeHTTPResponse(200, {"emailAddress": "user@gmail.com"})
         monkeypatch.setattr("httpx.get", lambda *a, **kw: resp)
         assert get_gmail_user_email("token") == "user@gmail.com"
 
@@ -331,14 +332,14 @@ def _mock_successful_flow(monkeypatch):
     })
 
     # Mock userinfo
-    userinfo_resp = _FakeHTTPResponse(200, {"email": "user@gmail.com"})
+    profile_resp = _FakeHTTPResponse(200, {"emailAddress": "user@gmail.com"})
 
     def _mock_post(*args, **kwargs):
         return token_resp
 
     def _mock_get(url, **kwargs):
-        if "userinfo" in url:
-            return userinfo_resp
+        if "profile" in url:
+            return profile_resp
         return _FakeHTTPResponse(404)
 
     monkeypatch.setattr("httpx.post", _mock_post)
@@ -484,11 +485,11 @@ class TestAccountIsolation:
             "refresh_token": f"rt-{gmail_address}",
             "expires_in": 3600,
         })
-        userinfo_resp = _FakeHTTPResponse(200, {"email": gmail_address})
+        profile_resp = _FakeHTTPResponse(200, {"emailAddress": gmail_address})
         monkeypatch.setattr("httpx.post", lambda *a, **kw: token_resp)
         monkeypatch.setattr(
             "httpx.get",
-            lambda url, **kw: userinfo_resp if "userinfo" in url
+            lambda url, **kw: profile_resp if "profile" in url
             else _FakeHTTPResponse(404),
         )
 
