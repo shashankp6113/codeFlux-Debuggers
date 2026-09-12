@@ -1,3 +1,4 @@
+@import 'leaflet/dist/leaflet.css';
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -713,4 +714,45 @@ h2, .text-h2 {
 .dropdown-item:hover {
   background-color: var(--bg-surface-hover);
   color: var(--text-primary);
+}
+
+/* Geolocation Map Minimal Styling */
+
+
+.leaflet-layer,
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out,
+.leaflet-control-attribution {
+  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+}
+
+.leaflet-container {
+  background: var(--bg-surface-hover) !important;
+  font-family: inherit !important;
+  z-index: 10;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-base);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+}
+
+.leaflet-popup-content {
+  margin: 12px !important;
+  line-height: 1.4 !important;
+}
+
+.map-unavailable {
+  height: 120px;
+  width: 100%;
+  margin-bottom: 1rem;
+  border-radius: 8px;
+  background-color: var(--bg-surface-hover);
+  border: 1px dashed var(--border-base);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }

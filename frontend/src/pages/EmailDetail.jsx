@@ -5,6 +5,20 @@ import {
   List, Flag, Network, Key, Activity
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
+
+function MapBounds({ markers }) {
+  const map = useMap();
+  useEffect(() => {
+    if (markers && markers.length > 0) {
+      const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lng]));
+      map.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 });
+    }
+  }, [markers, map]);
+  return null;
+}
+
 
 export default function EmailDetail() {
   const { id } = useParams();
@@ -219,12 +233,59 @@ export default function EmailDetail() {
         {geo.results?.length > 0 && (
           <div className="card">
             <h2 className="card-title"><Globe size={16} strokeWidth={1.5} /> Geolocation & ASN</h2>
+            
+            {(() => {
+              const validMarkers = geo.results
+                .filter(g => g.latitude != null && g.longitude != null)
+                .map(g => ({
+                  lat: g.latitude,
+                  lng: g.longitude,
+                  ip: g.ip,
+                  city: g.city,
+                  country: g.country,
+                  org: g.organization,
+                  asn: g.asn
+                }));
+
+              return validMarkers.length > 0 ? (
+                <div style={{ height: '240px', width: '100%', marginBottom: '1.5rem', borderRadius: '8px', overflow: 'hidden' }}>
+                  <MapContainer center={[validMarkers[0].lat, validMarkers[0].lng]} zoom={5} style={{ height: '100%', width: '100%' }} scrollWheelZoom={false}>
+                    <TileLayer
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    />
+                    <MapBounds markers={validMarkers} />
+                    {validMarkers.map((m, i) => (
+                      <CircleMarker key={i} center={[m.lat, m.lng]} radius={8} pathOptions={{ color: 'var(--status-high-text)', fillColor: 'var(--status-high-text)', fillOpacity: 0.6 }}>
+                        <Popup>
+                          <div className="text-small">
+                            <div style={{ fontWeight: 600, marginBottom: '4px' }}>{m.ip}</div>
+                            <div>{m.city ? `${m.city}, ` : ''}{m.country || "Unknown Location"}</div>
+                            {m.org && <div className="text-muted" style={{ marginTop: '4px' }}>{m.org} {m.asn ? `(AS${m.asn})` : ''}</div>}
+                            <div className="text-muted" style={{ marginTop: '6px', fontStyle: 'italic', fontSize: '11px' }}>Approximate IP geolocation</div>
+                          </div>
+                        </Popup>
+                      </CircleMarker>
+                    ))}
+                  </MapContainer>
+                </div>
+              ) : (
+                <div className="map-unavailable">
+                  <div className="text-muted" style={{ textAlign: 'center' }}>
+                    <Globe size={24} strokeWidth={1.5} style={{ opacity: 0.5, marginBottom: '8px', margin: '0 auto' }} />
+                    <div style={{ fontWeight: 500 }}>Map unavailable</div>
+                    <div className="text-small" style={{ marginTop: '4px' }}>No valid coordinates were returned for these IPs.</div>
+                  </div>
+                </div>
+              );
+            })()}
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
               {geo.results.map((g, i) => (
                 <div key={i} style={{ backgroundColor: 'var(--bg-base)', padding: '1rem', borderRadius: '6px' }}>
                   <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>{g.ip}</div>
                   <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                    <MapPin size={12} /> {g.city ? `${g.city}, ` : ''}{g.country || "Unknown Location"}
+                    <MapPin size={12} strokeWidth={1.5} /> {g.city ? `${g.city}, ` : ''}{g.country || "Unknown Location"}
                   </div>
                   {g.organization && (
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
