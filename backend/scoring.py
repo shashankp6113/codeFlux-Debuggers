@@ -53,7 +53,7 @@ RULE_WEIGHTS: Dict[str, int] = {
     "MALFORMED_RECEIVED_HEADER": 10,
     "SPF_FAIL": 15,
     "DKIM_FAIL": 15,
-    "DMARC_FAIL": 20,
+    "DMARC_FAIL": 30,
     "SPF_SOFTFAIL": 8,
     "SPF_VERDICT_CONFLICT": 5,
 }
@@ -81,9 +81,9 @@ RULE_CATEGORIES: Dict[str, str] = {
 
 # Maximum contribution any single category may make to the total score.
 CATEGORY_CAPS: Dict[str, int] = {
-    "identity": 25,
-    "authentication": 25,
-    "routing": 25,
+    "identity": 40,
+    "authentication": 40,
+    "routing": 40,
 }
 
 
@@ -139,6 +139,10 @@ def calculate_threat_score(analysis: ForensicAnalysis) -> ThreatScore:
     raw_category_scores: Dict[str, int] = {}
     contributions: List[dict] = []
 
+    # Avoid double-counting related authentication indicators.
+    # If DMARC fails, it inherently means SPF and/or DKIM failed or misaligned.
+    has_dmarc_fail = any(f.rule_id == "DMARC_FAIL" for f in analysis.flags)
+
     for flag in analysis.flags:
         base_weight = RULE_WEIGHTS.get(flag.rule_id)
         if base_weight is None:
@@ -151,6 +155,10 @@ def calculate_threat_score(analysis: ForensicAnalysis) -> ThreatScore:
             points = 0
         else:
             points = int(base_weight * multiplier)
+
+        # Suppress double-counted auth failures to keep the score proportional
+        if has_dmarc_fail and flag.rule_id in ("SPF_FAIL", "DKIM_FAIL", "SPF_SOFTFAIL", "SPF_VERDICT_CONFLICT"):
+            points = 0
 
         category = RULE_CATEGORIES[flag.rule_id]
 

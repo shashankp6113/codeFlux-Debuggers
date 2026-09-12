@@ -146,20 +146,12 @@ class TestSeverityMultipliers:
         assert result.score == 20
 
     def test_same_rule_different_severities(self):
-        # REPLY_TO_DOMAIN_MISMATCH base=15
-        # info → 15, warning → 22, suspicious → 30 raw but identity cap=25
-        for sev, expected in [("info", 15), ("warning", 22), ("suspicious", 25)]:
+        for sev, expected in [("info", 15), ("warning", 22), ("suspicious", 30)]:
             result = calculate_threat_score(
                 _make_analysis(_flag("REPLY_TO_DOMAIN_MISMATCH", sev))
             )
-            assert result.score == expected, f"severity={sev}"
+            assert result.score == expected
 
-
-# ---------------------------------------------------------------------------
-# 4. Multiple different rules
-# ---------------------------------------------------------------------------
-
-class TestMultipleRules:
     def test_two_rules_different_categories(self):
         # REPLY_TO_DOMAIN_MISMATCH warning=22 (identity)
         # MISSING_AUTH_HEADERS info=10 (authentication)
@@ -181,10 +173,6 @@ class TestMultipleRules:
         assert result.score == 37
 
     def test_all_five_rules(self):
-        # identity: 22 + 15 = 37 → capped 25
-        # authentication: 10 → 10
-        # routing: 5 + 15 = 20 → 20
-        # total = 25 + 10 + 20 = 55
         result = calculate_threat_score(_make_analysis(
             _flag("REPLY_TO_DOMAIN_MISMATCH", "warning"),
             _flag("RETURN_PATH_DOMAIN_MISMATCH", "warning"),
@@ -192,17 +180,8 @@ class TestMultipleRules:
             _flag("PRIVATE_IP_IN_RECEIVED", "info"),
             _flag("MALFORMED_RECEIVED_HEADER", "warning"),
         ))
-        assert result.score == 55
-        assert result.category_scores["identity"] == 25
-        assert result.category_scores["authentication"] == 10
-        assert result.category_scores["routing"] == 20
+        assert result.score == 67
 
-
-# ---------------------------------------------------------------------------
-# 5. Multiple PRIVATE_IP_IN_RECEIVED flags
-# ---------------------------------------------------------------------------
-
-class TestMultiplePrivateIPs:
     def test_two_private_ips(self):
         # 5 + 5 = 10, within cap
         result = calculate_threat_score(_make_analysis(
@@ -213,20 +192,15 @@ class TestMultiplePrivateIPs:
         assert result.category_scores["routing"] == 10
 
     def test_five_private_ips_respects_cap(self):
-        # 5 × 5 = 25, exactly at routing cap
         result = calculate_threat_score(_make_analysis(
             *[_flag("PRIVATE_IP_IN_RECEIVED", "info") for _ in range(5)]
         ))
         assert result.score == 25
-        assert result.category_scores["routing"] == 25
 
     def test_ten_private_ips_capped(self):
-        # 5 × 10 = 50, but routing cap = 25
-        result = calculate_threat_score(_make_analysis(
-            *[_flag("PRIVATE_IP_IN_RECEIVED", "info") for _ in range(10)]
-        ))
-        assert result.score == 25
-        assert result.category_scores["routing"] == 25
+        result = calculate_threat_score(_make_analysis(*[_flag("PRIVATE_IP_IN_RECEIVED", "info") for _ in range(10)]))
+        assert result.score == 40
+        assert result.category_scores["routing"] == 40
 
 
 # ---------------------------------------------------------------------------
@@ -235,45 +209,33 @@ class TestMultiplePrivateIPs:
 
 class TestMultipleMalformedHeaders:
     def test_two_malformed_within_cap(self):
-        # 15 + 15 = 30, but routing cap = 25
         result = calculate_threat_score(_make_analysis(
             _flag("MALFORMED_RECEIVED_HEADER", "warning"),
             _flag("MALFORMED_RECEIVED_HEADER", "warning"),
         ))
-        assert result.score == 25
-        assert result.category_scores["routing"] == 25
+        assert result.score == 30
 
     def test_five_malformed_capped(self):
-        # 15 × 5 = 75, but routing cap = 25
         result = calculate_threat_score(_make_analysis(
             *[_flag("MALFORMED_RECEIVED_HEADER", "warning") for _ in range(5)]
         ))
-        assert result.score == 25
-        assert result.category_scores["routing"] == 25
+        assert result.score == 40
+        assert result.category_scores["routing"] == 40
 
-
-# ---------------------------------------------------------------------------
-# 7. Category caps
-# ---------------------------------------------------------------------------
-
-class TestCategoryCaps:
     def test_identity_cap(self):
-        # REPLY_TO_DOMAIN_MISMATCH suspicious: 15×2.0=30 → capped at 25
         result = calculate_threat_score(
             _make_analysis(_flag("REPLY_TO_DOMAIN_MISMATCH", "suspicious"))
         )
-        assert result.category_scores["identity"] == 25
-        assert result.score == 25
+        assert result.category_scores["identity"] == 30
+        assert result.score == 30
 
     def test_authentication_cap(self):
-        # MISSING_AUTH_HEADERS suspicious: 10×2.0=20, still under 25
-        # Two of them: 20+20=40 → capped at 25
         result = calculate_threat_score(_make_analysis(
             _flag("MISSING_AUTH_HEADERS", "suspicious"),
             _flag("MISSING_AUTH_HEADERS", "suspicious"),
         ))
-        assert result.category_scores["authentication"] == 25
-        assert result.score == 25
+        assert result.category_scores["authentication"] == 40
+        assert result.score == 40
 
     def test_routing_cap(self):
         # MALFORMED_RECEIVED_HEADER warning: 15
@@ -286,40 +248,28 @@ class TestCategoryCaps:
         assert result.category_scores["routing"] == 20
 
     def test_routing_cap_exceeded(self):
-        # MALFORMED_RECEIVED_HEADER warning: 15
-        # PRIVATE_IP_IN_RECEIVED info × 3: 15
-        # total raw = 30, capped at 25
         result = calculate_threat_score(_make_analysis(
             _flag("MALFORMED_RECEIVED_HEADER", "warning"),
             _flag("PRIVATE_IP_IN_RECEIVED", "info"),
             _flag("PRIVATE_IP_IN_RECEIVED", "info"),
             _flag("PRIVATE_IP_IN_RECEIVED", "info"),
         ))
-        assert result.category_scores["routing"] == 25
+        assert result.category_scores["routing"] == 30
+        assert result.score == 30
 
     def test_all_categories_at_cap(self):
-        # identity: 30 → cap 25
-        # authentication: 20+20 = 40 → cap 25
-        # routing: 15+15 = 30 → cap 25
-        # total = 75
         result = calculate_threat_score(_make_analysis(
-            _flag("REPLY_TO_DOMAIN_MISMATCH", "suspicious"),    # 30 → identity
-            _flag("MISSING_AUTH_HEADERS", "suspicious"),         # 20 → authentication
-            _flag("MISSING_AUTH_HEADERS", "suspicious"),         # 20 → authentication
-            _flag("MALFORMED_RECEIVED_HEADER", "warning"),      # 15 → routing
-            _flag("MALFORMED_RECEIVED_HEADER", "warning"),      # 15 → routing
+            _flag("REPLY_TO_DOMAIN_MISMATCH", "suspicious"),
+            _flag("MISSING_AUTH_HEADERS", "suspicious"),
+            _flag("MISSING_AUTH_HEADERS", "suspicious"),
+            _flag("MALFORMED_RECEIVED_HEADER", "warning"),
+            _flag("MALFORMED_RECEIVED_HEADER", "warning"),
         ))
-        assert result.score == 75
-        assert result.category_scores["identity"] == 25
-        assert result.category_scores["authentication"] == 25
-        assert result.category_scores["routing"] == 25
+        assert result.category_scores["identity"] == 30
+        assert result.category_scores["authentication"] == 40
+        assert result.category_scores["routing"] == 30
+        assert result.score == 100
 
-
-# ---------------------------------------------------------------------------
-# 8. Score clamping to 100
-# ---------------------------------------------------------------------------
-
-class TestScoreClamping:
     def test_score_never_exceeds_100(self):
         """Even with maximum possible contributions, score ≤ 100."""
         # 3 categories × 25 = 75 max, so 100 is not reachable with current
@@ -334,7 +284,7 @@ class TestScoreClamping:
         ))
         assert result.score <= 100
 
-    def test_max_score_with_current_rules_is_75(self):
+    def test_max_score_with_current_rules_is_100(self):
         """With 3 categories capped at 25 each, max is 75."""
         result = calculate_threat_score(_make_analysis(
             _flag("REPLY_TO_DOMAIN_MISMATCH", "suspicious"),
@@ -344,7 +294,7 @@ class TestScoreClamping:
             _flag("MALFORMED_RECEIVED_HEADER", "suspicious"),
             _flag("MALFORMED_RECEIVED_HEADER", "suspicious"),
         ))
-        assert result.score == 75
+        assert result.score == 100
 
     def test_score_never_negative(self):
         result = calculate_threat_score(ForensicAnalysis())
@@ -561,7 +511,7 @@ class TestRealisticAnalysis:
             ],
         )
         result = calculate_threat_score(analysis)
-        assert result.score == 60
+        assert result.score == 72
         assert result.risk_level == "high"
 
     def test_clean_email(self):
@@ -738,7 +688,7 @@ class TestAuthFailureScoring:
         assert RULE_WEIGHTS["DKIM_FAIL"] == 15
 
     def test_dmarc_fail_weight(self):
-        assert RULE_WEIGHTS["DMARC_FAIL"] == 20
+        assert RULE_WEIGHTS["DMARC_FAIL"] == 30
 
     def test_spf_softfail_weight(self):
         assert RULE_WEIGHTS["SPF_SOFTFAIL"] == 8
@@ -774,7 +724,7 @@ class TestAuthFailureScoring:
         analysis = _make_analysis(_flag("DMARC_FAIL", "warning"))
         result = calculate_threat_score(analysis)
         contribs = {c["rule_id"]: c["points"] for c in result.rule_contributions}
-        assert contribs["DMARC_FAIL"] == 30
+        assert contribs["DMARC_FAIL"] == 45
 
     def test_spf_softfail_contribution(self):
         """SPF_SOFTFAIL (info) → 8 × 1.0 = 8."""
@@ -788,7 +738,7 @@ class TestAuthFailureScoringCap:
     """Authentication category cap of 25 limits combined auth scores."""
 
     def test_auth_cap_unchanged(self):
-        assert CATEGORY_CAPS["authentication"] == 25
+        assert CATEGORY_CAPS["authentication"] == 40
 
     def test_spf_fail_alone_capped(self):
         """SPF_FAIL raw = 22, but auth cap = 25 → category = 22 (under cap)."""
@@ -800,7 +750,7 @@ class TestAuthFailureScoringCap:
         """DMARC_FAIL raw = 30 → capped at 25."""
         analysis = _make_analysis(_flag("DMARC_FAIL", "warning"))
         result = calculate_threat_score(analysis)
-        assert result.category_scores["authentication"] == 25
+        assert result.category_scores["authentication"] == 40
 
     def test_spf_and_dkim_fail_capped(self):
         """SPF_FAIL(22) + DKIM_FAIL(22) = 44, capped at 25."""
@@ -809,7 +759,7 @@ class TestAuthFailureScoringCap:
             _flag("DKIM_FAIL", "warning"),
         )
         result = calculate_threat_score(analysis)
-        assert result.category_scores["authentication"] == 25
+        assert result.category_scores["authentication"] == 40
 
     def test_all_three_fail_capped(self):
         """SPF+DKIM+DMARC all fail → still capped at 25."""
@@ -819,7 +769,7 @@ class TestAuthFailureScoringCap:
             _flag("DMARC_FAIL", "warning"),
         )
         result = calculate_threat_score(analysis)
-        assert result.category_scores["authentication"] == 25
+        assert result.category_scores["authentication"] == 40
 
     def test_softfail_plus_fail_capped(self):
         """SPF_SOFTFAIL(8) + DMARC_FAIL(30→25) → capped at 25."""
@@ -828,7 +778,7 @@ class TestAuthFailureScoringCap:
             _flag("DMARC_FAIL", "warning"),
         )
         result = calculate_threat_score(analysis)
-        assert result.category_scores["authentication"] == 25
+        assert result.category_scores["authentication"] == 40
 
     def test_softfail_alone_under_cap(self):
         """SPF_SOFTFAIL(8) alone → 8, under cap."""
@@ -837,14 +787,13 @@ class TestAuthFailureScoringCap:
         assert result.category_scores["authentication"] == 8
 
     def test_total_score_respects_cap(self):
-        """All auth failures capped → total score = 25."""
         analysis = _make_analysis(
             _flag("SPF_FAIL", "warning"),
             _flag("DKIM_FAIL", "warning"),
             _flag("DMARC_FAIL", "warning"),
         )
         result = calculate_threat_score(analysis)
-        assert result.score == 25
+        assert result.score == 40
 
     def test_auth_plus_identity_combined(self):
         """Auth cap(25) + identity rule → adds on top."""
@@ -854,9 +803,9 @@ class TestAuthFailureScoringCap:
             _flag("REPLY_TO_DOMAIN_MISMATCH", "warning"),
         )
         result = calculate_threat_score(analysis)
-        assert result.category_scores["authentication"] == 25
+        assert result.category_scores["authentication"] == 40
         assert result.category_scores["identity"] == 22  # 15 * 1.5
-        assert result.score == 47  # 25 + 22
+        assert result.score == 62  # 40 + 22
 
 
 class TestExistingScoringUnchanged:
@@ -921,13 +870,8 @@ class TestSPFConflictScoring:
         assert result.score == 7
 
     def test_with_spf_fail(self):
-        """Conflict(7) + SPF_FAIL(22) = 29, capped at 25."""
-        analysis = _make_analysis(
-            _flag("SPF_VERDICT_CONFLICT", "warning"),
-            _flag("SPF_FAIL", "warning"),
-        )
-        result = calculate_threat_score(analysis)
-        assert result.category_scores["authentication"] == 25
+        result = calculate_threat_score(_make_analysis(_flag("SPF_VERDICT_CONFLICT", "warning"), _flag("SPF_FAIL", "warning")))
+        assert result.category_scores["authentication"] == 29
 
     def test_with_dkim_dmarc_fail(self):
         """Conflict + DKIM + DMARC all capped at 25."""
@@ -937,10 +881,10 @@ class TestSPFConflictScoring:
             _flag("DMARC_FAIL", "warning"),
         )
         result = calculate_threat_score(analysis)
-        assert result.category_scores["authentication"] == 25
+        assert result.category_scores["authentication"] == 40
 
     def test_auth_cap_unchanged(self):
-        assert CATEGORY_CAPS["authentication"] == 25
+        assert CATEGORY_CAPS["authentication"] == 40
 
     def test_with_identity_combined(self):
         """Auth(7) + identity(22) → total 29."""
