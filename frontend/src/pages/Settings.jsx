@@ -1,12 +1,49 @@
 import { useEffect, useState } from 'react';
-import { Settings as SettingsIcon, User, Database, Cpu } from 'lucide-react';
+import { Settings as SettingsIcon, User, Database, Cpu, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../lib/api';
 
+
 export default function Settings() {
-  const { emailAddress, logout } = useAuth();
+  const { emailAddress, emailAccountId, logout, disconnectAccount } = useAuth();
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDisconnect = async () => {
+    if (!window.confirm("Are you sure you want to disconnect your Gmail account? All synced emails and forensic data will be permanently deleted from our servers.")) {
+      return;
+    }
+    try {
+      setDisconnecting(true);
+      if (emailAccountId) {
+        await api.disconnectGmail(emailAccountId);
+      }
+      disconnectAccount();
+      alert("Gmail account disconnected and data deleted successfully.");
+    } catch (err) {
+      console.error(err);
+      alert("Failed to disconnect Gmail account.");
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!window.confirm("CRITICAL WARNING: This will permanently delete your entire MailForensics account, including all disconnected or connected Gmail accounts, tokens, and scanned forensic data. This action cannot be undone.")) return;
+    if (window.prompt("Type DELETE to confirm") !== "DELETE") return;
+    try {
+      setDeleting(true);
+      await api.deleteAccount();
+      logout();
+    } catch (err) {
+      console.error(err);
+      alert("Failed to delete account.");
+      setDeleting(false);
+    }
+  };
+
 
   useEffect(() => {
     async function loadSettings() {
@@ -31,15 +68,25 @@ export default function Settings() {
         <div style={{ marginTop: '1rem', color: 'var(--text-secondary)' }}>
           <p style={{ marginBottom: '0.5rem' }}><strong>Signed In As:</strong> {emailAddress || 'User'}</p>
           <p style={{ marginBottom: '1.5rem' }}><strong>Authentication:</strong> Active Session</p>
-          <button className="btn-secondary" onClick={logout}>Sign Out</button>
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <button className="btn-secondary" onClick={logout}>Sign Out</button>
+            <button className="btn-secondary" style={{ color: '#ef4444', borderColor: '#ef4444' }} onClick={handleDeleteAccount} disabled={deleting}>
+              {deleting ? "Deleting..." : "Delete Account & Data"}
+            </button>
+          </div>
         </div>
       </div>
 
       <div className="card" style={{ marginBottom: '1.5rem' }}>
         <h2 className="card-title"><Database size={18} /> Data Source</h2>
         <div style={{ marginTop: '1rem', color: 'var(--text-secondary)' }}>
-          <p style={{ marginBottom: '0.5rem' }}><strong>Connected Gmail:</strong> {emailAddress || 'None'}</p>
-          <p style={{ marginBottom: '0.5rem' }}><strong>Storage:</strong> PostgreSQL (Local)</p>
+          <p style={{ marginBottom: '0.5rem' }}><strong>Connected Gmail:</strong> {emailAccountId ? emailAddress : 'None'}</p>
+          <p style={{ marginBottom: '1.5rem' }}><strong>Storage:</strong> PostgreSQL (Local)</p>
+          {emailAccountId && (
+            <button className="btn-secondary" style={{ color: '#ef4444', borderColor: '#ef4444' }} onClick={handleDisconnect} disabled={disconnecting}>
+              {disconnecting ? "Disconnecting..." : "Disconnect Gmail & Delete Data"}
+            </button>
+          )}
         </div>
       </div>
 

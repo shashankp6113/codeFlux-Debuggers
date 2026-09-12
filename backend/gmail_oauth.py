@@ -277,3 +277,33 @@ def get_gmail_user_email(access_token: str) -> str:
         raise UserInfoError("Gmail profile response missing emailAddress")
 
     return email
+
+
+def revoke_google_token(token: str) -> bool:
+    """Revoke a Google OAuth access or refresh token.
+    
+    Args:
+        token: The access_token or refresh_token to revoke.
+        
+    Returns:
+        True if successfully revoked or already invalid, False on network error.
+    """
+    import httpx
+    if not token:
+        return True
+    try:
+        resp = httpx.post(
+            "https://oauth2.googleapis.com/revoke",
+            params={"token": token},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=10.0
+        )
+        # 200 = Success, 400 = Token already expired/invalid. 
+        # Either way, we consider it "revoked" from our perspective so we can proceed with local deletion.
+        if resp.status_code in (200, 400):
+            return True
+        return False
+    except Exception:
+        # We don't want to permanently block account deletion due to network failure,
+        # but the caller can decide. Here we just return False.
+        return False

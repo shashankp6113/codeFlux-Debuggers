@@ -12,7 +12,7 @@ class User(Base):
     name=Column(String,nullable=True)
     created_at=Column(DateTime,default=datetime.utcnow)
 
-    email_accounts=relationship("EmailAccount",back_populates="user")
+    email_accounts=relationship("EmailAccount",back_populates="user", cascade="all, delete-orphan")
 
 
 class EmailAccount(Base):
@@ -27,7 +27,7 @@ class EmailAccount(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
 
     user=relationship("User",back_populates="email_accounts")
-    emails=relationship("Email",back_populates="email_account")
+    emails=relationship("Email",back_populates="email_account", cascade="all, delete-orphan")
 
 
 class Email(Base):
@@ -52,7 +52,7 @@ class Email(Base):
 
     email_account=relationship("EmailAccount",back_populates="emails")
     forensic_analysis=relationship(
-        "ForensicAnalysis",back_populates="email",uselist=False
+        "ForensicAnalysis",back_populates="email",uselist=False, cascade="all, delete-orphan"
     )
 
 

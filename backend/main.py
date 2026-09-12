@@ -1038,3 +1038,46 @@ def get_settings_info(current_user: User = Depends(get_current_user)):
         "ai_provider": provider.name,
         "ai_model": getattr(provider, "_model", "Unknown")
     }
+
+
+@app.delete("/api/gmail/{email_account_id}")
+def disconnect_gmail_account(
+    email_account_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Revoke OAuth token and delete the email account and all associated data."""
+    from gmail_oauth import revoke_google_token
+    
+    account = db.query(EmailAccount).filter_by(id=email_account_id, user_id=current_user.id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Email account not found or unauthorized")
+        
+    # Attempt to revoke token. Use refresh_token if available, else access_token.
+    token_to_revoke = account.refresh_token or account.access_token
+    if token_to_revoke:
+        # We don't block deletion if revocation fails due to network, 
+        # but we attempt it per Google's Restricted Scope policy.
+        revoke_google_token(token_to_revoke)
+        
+    db.delete(account)
+    db.commit()
+    return {"message": "Account disconnected and data deleted successfully"}
+
+@app.delete("/api/users/me")
+def delete_current_user(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete the user and all associated accounts, tokens, and synced data."""
+    from gmail_oauth import revoke_google_token
+    
+    accounts = db.query(EmailAccount).filter_by(user_id=current_user.id).all()
+    for account in accounts:
+        token_to_revoke = account.refresh_token or account.access_token
+        if token_to_revoke:
+            revoke_google_token(token_to_revoke)
+            
+    db.delete(current_user)
+    db.commit()
+    return {"message": "User account and all data deleted successfully"}

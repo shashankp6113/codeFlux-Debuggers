@@ -1,6 +1,9 @@
 // API Utility Functions
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+
 async function fetchApi(endpoint, options = {}) {
+  const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
   const token = localStorage.getItem('token');
   const headers = {
     'Content-Type': 'application/json',
@@ -12,7 +15,7 @@ async function fetchApi(endpoint, options = {}) {
   }
 
   try {
-    const response = await fetch(endpoint, {
+    const response = await fetch(url, {
       ...options,
       headers,
     });

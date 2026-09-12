@@ -28,7 +28,14 @@ export function AuthProvider({ children }) {
     setEmailAccountId(id);
   };
 
+
+  const disconnectAccount = () => {
+    localStorage.removeItem('email_account_id');
+    setEmailAccountId(null);
+  };
+
   const logout = () => {
+
     localStorage.removeItem('token');
     localStorage.removeItem('email_account_id');
     localStorage.removeItem('email_address');
@@ -39,7 +46,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ token, isAuthenticated: !!token, emailAccountId, emailAddress, login, logout, updateEmailAccountId }}>
+    <AuthContext.Provider value={{ token, isAuthenticated: !!token, emailAccountId, emailAddress, login, logout, updateEmailAccountId, disconnectAccount }}>
       {children}
     </AuthContext.Provider>
   );
