@@ -39,11 +39,15 @@ async function fetchApi(endpoint, options = {}) {
 export const api = {
   getDashboardSummary: () => fetchApi('/api/dashboard/summary'),
   
-  getEmails: (limit = 50) => fetchApi(`/api/emails?limit=${limit}`),
+  getEmails: (limit = 50, search = "") => fetchApi(`/api/emails?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ''}`),
   getEmail: (id) => fetchApi(`/api/emails/${id}`),
   
   getEmailReport: (id) => fetchApi(`/api/emails/${id}/report`),
   
+
+  getNotifications: (limit = 20) => fetchApi(`/api/notifications?limit=${limit}`),
+  getSettingsInfo: () => fetchApi('/api/settings/info'),
+
   getThreats: (filters = {}) => {
     const params = new URLSearchParams();
     if (filters.risk_level) params.append('risk_level', filters.risk_level);

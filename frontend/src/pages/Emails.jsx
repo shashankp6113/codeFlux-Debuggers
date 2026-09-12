@@ -1,21 +1,24 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Inbox, AlertTriangle, Loader } from 'lucide-react';
 import { api } from '../lib/api';
 import UploadButton from '../components/UploadButton';
 
 export default function Emails() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const q = searchParams.get('q') || '';
+  
   const [emails, setEmails] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(q);
 
   useEffect(() => {
     async function loadEmails() {
       try {
         setLoading(true);
-        const data = await api.getEmails();
+        const data = await api.getEmails(50, q);
         setEmails(data || []);
       } catch (err) {
         setError(err.message || "Failed to load emails.");
@@ -24,15 +27,14 @@ export default function Emails() {
       }
     }
     loadEmails();
-  }, []);
+  }, [q]);
 
-  const filteredEmails = emails.filter(email => {
-    if (!searchQuery) return true;
-    const lowerQuery = searchQuery.toLowerCase();
-    const subjectMatch = (email.subject || '').toLowerCase().includes(lowerQuery);
-    const senderMatch = (email.sender || '').toLowerCase().includes(lowerQuery);
-    return subjectMatch || senderMatch;
-  });
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    setSearchParams(searchQuery ? { q: searchQuery } : {});
+  };
+
+  const filteredEmails = emails; // Search is now server-side
 
   if (loading) {
     return (
@@ -69,16 +71,17 @@ export default function Emails() {
       <h1 className="page-title">Investigations</h1>
       
       <div className="card">
-        <div className="search-container">
+        <form className="search-container" onSubmit={handleSearchSubmit}>
           <Search size={16} strokeWidth={1.5} className="search-icon" />
           <input 
             type="text" 
             className="search-input" 
-            placeholder="Search by subject or sender..." 
+            placeholder="Search by subject or sender (press Enter)..." 
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
-        </div>
+          <button type="submit" style={{ display: 'none' }}>Search</button>
+        </form>
 
         {filteredEmails.length === 0 ? (
           <div className="empty-state" style={{ padding: '4rem 1rem' }}>

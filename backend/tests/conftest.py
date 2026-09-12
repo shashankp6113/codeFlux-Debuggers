@@ -1,5 +1,12 @@
 
 import os
+os.environ.setdefault("POSTGRES_USER", "x")
+os.environ.setdefault("POSTGRES_PASSWORD", "x")
+os.environ.setdefault("POSTGRES_HOST", "x")
+os.environ.setdefault("POSTGRES_PORT", "5432")
+os.environ.setdefault("POSTGRES_DB", "x")
+
+import os
 os.environ["VIRUSTOTAL_API_KEY"] = ""
 """Shared pytest configuration for backend tests.
 

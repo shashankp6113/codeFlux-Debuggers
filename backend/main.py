@@ -206,9 +206,20 @@ def gmail_auth_callback(
 # ---------------------------------------------------------------------------
 
 @app.get("/api/emails", response_model=List[EmailResponse])
-def list_emails(limit: int = 50, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def list_emails(
+    limit: int = 50,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Return a list of persisted emails, newest first."""
-    emails = db.query(Email).join(EmailAccount).filter(EmailAccount.user_id == current_user.id).order_by(Email.received_at.desc()).limit(limit).all()
+    query = db.query(Email).join(EmailAccount).filter(EmailAccount.user_id == current_user.id)
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            Email.subject.ilike(search_term) | Email.sender.ilike(search_term)
+        )
+    emails = query.order_by(Email.received_at.desc()).limit(limit).all()
     responses = []
     for email in emails:
         resp = EmailResponse.model_validate(email)
@@ -371,7 +382,7 @@ def list_threats(
         score = t_score.get("score", 0)
         risk = t_score.get("risk_level", "low").lower()
         
-        ai = analysis.get("ai_analysis", {})
+        ai = analysis.get("ai_analysis") or {}
         cls_type = ai.get("classification", "unknown").lower()
         conf = ai.get("confidence", 0.0)
         
@@ -844,3 +855,74 @@ def get_gmail_sync_status(
         raise HTTPException(status_code=404, detail="EmailAccount not found")
     
     return get_sync_status(account.id)
+
+
+from pydantic import BaseModel
+from datetime import datetime
+
+class NotificationResponse(BaseModel):
+    id: str
+    type: str
+    title: str
+    message: str
+    email_id: Optional[int] = None
+    created_at: datetime
+    is_read: bool = False
+
+@app.get("/api/notifications", response_model=List[NotificationResponse])
+def get_notifications(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    notifications = []
+    
+    recent_records = (
+        db.query(ForensicAnalysisRecord, Email)
+        .join(Email, ForensicAnalysisRecord.email_id == Email.id)
+        .join(EmailAccount, Email.email_account_id == EmailAccount.id)
+        .filter(EmailAccount.user_id == current_user.id)
+        .order_by(Email.received_at.desc())
+        .limit(limit)
+        .all()
+    )
+    
+    for fa, email in recent_records:
+        analysis = fa.analysis or {}
+        
+        # Threat notifications
+        threat = analysis.get("threat_score") or {}
+        risk_level = str(threat.get("risk_level", "")).lower()
+        if risk_level in ("critical", "high"):
+            notifications.append(NotificationResponse(
+                id=f"threat_{email.id}",
+                type="threat",
+                title=f"{risk_level.title()} Threat Detected",
+                message=f"Risk detected in: {email.subject or 'No Subject'}",
+                email_id=email.id,
+                created_at=email.received_at or email.created_at,
+            ))
+            
+        # AI failures
+        ai = analysis.get("ai_analysis") or {}
+        if ai.get("provider") == "error":
+            notifications.append(NotificationResponse(
+                id=f"ai_err_{email.id}",
+                type="ai_error",
+                title="AI Analysis Failed",
+                message=f"Failed to analyze: {email.subject or 'No Subject'}",
+                email_id=email.id,
+                created_at=email.received_at or email.created_at,
+            ))
+            
+    notifications.sort(key=lambda x: x.created_at, reverse=True)
+    return notifications[:limit]
+
+@app.get("/api/settings/info")
+def get_settings_info(current_user: User = Depends(get_current_user)):
+    from ai_analysis import get_ai_provider
+    provider = get_ai_provider()
+    return {
+        "ai_provider": provider.name,
+        "ai_model": getattr(provider, "_model", "Unknown")
+    }
