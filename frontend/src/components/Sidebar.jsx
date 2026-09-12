@@ -20,8 +20,8 @@ export default function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <ShieldAlert size={24} className="text-accent" color="#3b82f6" />
-        <span>MailForensics AI</span>
+        <ShieldAlert size={20} strokeWidth={1.5} color="var(--accent-primary)" />
+        <span style={{ fontSize: '14px', letterSpacing: '-0.01em' }}>MailForensics AI</span>
       </div>
       <nav className="sidebar-nav">
         {navItems.map((item) => {
@@ -34,7 +34,7 @@ export default function Sidebar() {
                 `nav-item ${isActive ? 'active' : ''}`
               }
             >
-              <Icon size={20} />
+              <Icon size={16} strokeWidth={1.5} />
               <span>{item.label}</span>
             </NavLink>
           );

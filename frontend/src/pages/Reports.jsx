@@ -80,7 +80,7 @@ export default function Reports() {
   if (error && !selectedReport) {
     return (
       <div className="empty-state">
-        <AlertTriangle size={48} color="#ef4444" className="empty-state-icon" />
+        <AlertTriangle size={48} color="var(--status-critical-text)" className="empty-state-icon" />
         <h3>Error Loading Data</h3>
         <p>{error}</p>
       </div>
@@ -93,64 +93,64 @@ export default function Reports() {
       <div className="report-container">
         <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
           <button className="btn-secondary" onClick={() => setSelectedReport(null)}>
-            <ArrowLeft size={16} /> Back to Reports
+            <ArrowLeft size={16} strokeWidth={1.5} /> Back to Reports
           </button>
           <div style={{ display: 'flex', gap: '1rem' }}>
             <button className="btn-secondary" onClick={handleExportCsv} disabled={!f}>
-              <Download size={16} /> Export CSV
+              <Download size={16} strokeWidth={1.5} /> Export CSV
             </button>
             <button className="btn-primary" onClick={handlePrint}>
-              <Printer size={16} /> Print / Save PDF
+              <Printer size={16} strokeWidth={1.5} /> Print / Save PDF
             </button>
           </div>
         </div>
         
-        <div className="card report-print-area" style={{ backgroundColor: 'white', color: 'black', padding: '3rem' }}>
-          <div style={{ textAlign: 'center', marginBottom: '3rem', borderBottom: '2px solid #e2e8f0', paddingBottom: '1.5rem' }}>
-            <h1 style={{ margin: 0, color: '#1e293b' }}>Forensic Email Analysis Report</h1>
-            <p style={{ color: '#64748b', margin: '0.5rem 0' }}>MailForensics AI</p>
-            <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>Report ID: {selectedReport.id} | Generated: {new Date().toLocaleString()}</div>
+        <div className="card report-print-area" style={{ padding: '3rem' }}>
+          <div style={{ textAlign: 'center', marginBottom: '3rem', borderBottom: '1px solid var(--border-base)', paddingBottom: '1.5rem' }}>
+            <h1 className="text-h1" style={{ margin: 0 }}>Forensic Email Analysis Report</h1>
+            <p className="text-secondary" style={{ margin: '0.5rem 0' }}>MailForensics AI</p>
+            <div className="text-small text-muted">Report ID: {selectedReport.id} | Generated: {new Date().toLocaleString()}</div>
           </div>
           
-          <h2 style={{ color: '#0f172a', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.5rem' }}>1. Executive Summary</h2>
+          <h2 className="text-h2" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>1. Executive Summary</h2>
           <table style={{ width: '100%', marginBottom: '2rem', borderCollapse: 'collapse' }}>
             <tbody>
               <tr>
-                <td style={{ padding: '0.5rem 0', fontWeight: 'bold', width: '20%', borderBottom: '1px solid #f1f5f9' }}>Subject</td>
-                <td style={{ padding: '0.5rem 0', borderBottom: '1px solid #f1f5f9' }}>{selectedReport.subject || '(No Subject)'}</td>
+                <td style={{ padding: '0.5rem 0', fontWeight: 'bold', width: '20%', borderBottom: '1px solid var(--border-subtle)' }}>Subject</td>
+                <td style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>{selectedReport.subject || '(No Subject)'}</td>
               </tr>
               <tr>
-                <td style={{ padding: '0.5rem 0', fontWeight: 'bold', borderBottom: '1px solid #f1f5f9' }}>Sender</td>
-                <td style={{ padding: '0.5rem 0', borderBottom: '1px solid #f1f5f9' }}>{selectedReport.sender}</td>
+                <td style={{ padding: '0.5rem 0', fontWeight: 'bold', borderBottom: '1px solid var(--border-subtle)' }}>Sender</td>
+                <td style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>{selectedReport.sender}</td>
               </tr>
               <tr>
-                <td style={{ padding: '0.5rem 0', fontWeight: 'bold', borderBottom: '1px solid #f1f5f9' }}>Recipient</td>
-                <td style={{ padding: '0.5rem 0', borderBottom: '1px solid #f1f5f9' }}>{selectedReport.recipient}</td>
+                <td style={{ padding: '0.5rem 0', fontWeight: 'bold', borderBottom: '1px solid var(--border-subtle)' }}>Recipient</td>
+                <td style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>{selectedReport.recipient}</td>
               </tr>
               <tr>
-                <td style={{ padding: '0.5rem 0', fontWeight: 'bold', borderBottom: '1px solid #f1f5f9' }}>Received</td>
-                <td style={{ padding: '0.5rem 0', borderBottom: '1px solid #f1f5f9' }}>{selectedReport.received_at ? new Date(selectedReport.received_at).toLocaleString() : 'N/A'}</td>
+                <td style={{ padding: '0.5rem 0', fontWeight: 'bold', borderBottom: '1px solid var(--border-subtle)' }}>Received</td>
+                <td style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>{selectedReport.received_at ? new Date(selectedReport.received_at).toLocaleString() : 'N/A'}</td>
               </tr>
             </tbody>
           </table>
           
           {f ? (
             <>
-              <h2 style={{ color: '#0f172a', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.5rem' }}>2. Threat Assessment</h2>
+              <h2 className="text-h2" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>2. Threat Assessment</h2>
               <div style={{ display: 'flex', gap: '2rem', marginBottom: '2rem' }}>
-                <div style={{ flex: 1, backgroundColor: '#f8fafc', padding: '1rem', borderRadius: '4px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.875rem', color: '#64748b', textTransform: 'uppercase' }}>Threat Score</div>
-                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#0f172a' }}>{f.threat_score?.score || 0}/100</div>
-                  <div style={{ fontWeight: 'bold', color: f.threat_score?.risk_level === 'critical' ? '#dc2626' : '#333', textTransform: 'capitalize' }}>
+                <div style={{ flex: 1, backgroundColor: 'var(--bg-surface-hover)', padding: '1rem', borderRadius: '4px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Threat Score</div>
+                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--text-primary)' }}>{f.threat_score?.score || 0}/100</div>
+                  <div style={{ fontWeight: 'bold', color: f.threat_score?.risk_level === 'critical' ? 'var(--status-critical-text)' : 'var(--text-primary)', textTransform: 'capitalize' }}>
                     {f.threat_score?.risk_level || 'Low'} Risk
                   </div>
                 </div>
-                <div style={{ flex: 1, backgroundColor: '#f8fafc', padding: '1rem', borderRadius: '4px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.875rem', color: '#64748b', textTransform: 'uppercase' }}>AI Classification</div>
-                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#0f172a', textTransform: 'capitalize' }}>
+                <div style={{ flex: 1, backgroundColor: 'var(--bg-surface-hover)', padding: '1rem', borderRadius: '4px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>AI Classification</div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--text-primary)', textTransform: 'capitalize' }}>
                     {f.ai_analysis?.classification || 'Unknown'}
                   </div>
-                  <div style={{ color: '#64748b' }}>
+                  <div style={{ color: 'var(--text-secondary)' }}>
                     {f.ai_analysis?.confidence ? Math.round(f.ai_analysis.confidence * 100) + '% Confidence' : 'N/A'}
                   </div>
                 </div>
@@ -158,36 +158,36 @@ export default function Reports() {
               
               {f.ai_analysis?.explanation && (
                 <div style={{ marginBottom: '2rem' }}>
-                  <h3 style={{ color: '#0f172a', fontSize: '1.1rem' }}>AI Reasoning</h3>
+                  <h3 className="text-h2">AI Reasoning</h3>
                   <p style={{ lineHeight: '1.6' }}>{f.ai_analysis.explanation}</p>
                 </div>
               )}
               
-              <h2 style={{ color: '#0f172a', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.5rem' }}>3. Authentication & Headers</h2>
+              <h2 className="text-h2" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>3. Authentication & Headers</h2>
               <table style={{ width: '100%', marginBottom: '2rem', borderCollapse: 'collapse' }}>
                 <thead>
-                  <tr style={{ backgroundColor: '#f8fafc' }}>
-                    <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Protocol</th>
-                    <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Verdict</th>
+                  <tr style={{ backgroundColor: 'var(--bg-surface-hover)' }}>
+                    <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '1px solid var(--border-base)' }}>Protocol</th>
+                    <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '1px solid var(--border-base)' }}>Verdict</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td style={{ padding: '0.5rem', borderBottom: '1px solid #f1f5f9' }}>SPF</td>
-                    <td style={{ padding: '0.5rem', borderBottom: '1px solid #f1f5f9', fontWeight: 'bold' }}>{f.authentication?.spf_verdict?.toUpperCase() || 'NONE'}</td>
+                    <td style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-subtle)' }}>SPF</td>
+                    <td style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontWeight: 'bold' }}>{f.authentication?.spf_verdict?.toUpperCase() || 'NONE'}</td>
                   </tr>
                   <tr>
-                    <td style={{ padding: '0.5rem', borderBottom: '1px solid #f1f5f9' }}>DKIM</td>
-                    <td style={{ padding: '0.5rem', borderBottom: '1px solid #f1f5f9', fontWeight: 'bold' }}>{f.authentication?.dkim_verdict?.toUpperCase() || 'NONE'}</td>
+                    <td style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-subtle)' }}>DKIM</td>
+                    <td style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontWeight: 'bold' }}>{f.authentication?.dkim_verdict?.toUpperCase() || 'NONE'}</td>
                   </tr>
                   <tr>
-                    <td style={{ padding: '0.5rem', borderBottom: '1px solid #f1f5f9' }}>DMARC</td>
-                    <td style={{ padding: '0.5rem', borderBottom: '1px solid #f1f5f9', fontWeight: 'bold' }}>{f.authentication?.dmarc_verdict?.toUpperCase() || 'NONE'}</td>
+                    <td style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-subtle)' }}>DMARC</td>
+                    <td style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontWeight: 'bold' }}>{f.authentication?.dmarc_verdict?.toUpperCase() || 'NONE'}</td>
                   </tr>
                 </tbody>
               </table>
 
-              <h2 style={{ color: '#0f172a', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.5rem' }}>4. Anomalies & Flags</h2>
+              <h2 className="text-h2" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>4. Anomalies & Flags</h2>
               {f.flags && f.flags.length > 0 ? (
                 <ul style={{ paddingLeft: '1.5rem', marginBottom: '2rem', lineHeight: '1.6' }}>
                   {f.flags.map((flag, idx) => (
@@ -200,22 +200,22 @@ export default function Reports() {
                 <p style={{ marginBottom: '2rem' }}>No significant anomalies detected.</p>
               )}
               
-              <h2 style={{ color: '#0f172a', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.5rem' }}>5. Indicators of Compromise</h2>
+              <h2 className="text-h2" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>5. Indicators of Compromise</h2>
               {f.ioc_extraction?.iocs && f.ioc_extraction.iocs.length > 0 ? (
                 <table style={{ width: '100%', marginBottom: '2rem', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
                   <thead>
-                    <tr style={{ backgroundColor: '#f8fafc' }}>
-                      <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Type</th>
-                      <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Value</th>
-                      <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Context</th>
+                    <tr style={{ backgroundColor: 'var(--bg-surface-hover)' }}>
+                      <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '1px solid var(--border-base)' }}>Type</th>
+                      <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '1px solid var(--border-base)' }}>Value</th>
+                      <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '1px solid var(--border-base)' }}>Context</th>
                     </tr>
                   </thead>
                   <tbody>
                     {f.ioc_extraction.iocs.map((ioc, idx) => (
                       <tr key={idx}>
-                        <td style={{ padding: '0.5rem', borderBottom: '1px solid #f1f5f9', textTransform: 'uppercase' }}>{ioc.ioc_type}</td>
-                        <td style={{ padding: '0.5rem', borderBottom: '1px solid #f1f5f9', wordBreak: 'break-all' }}>{ioc.value}</td>
-                        <td style={{ padding: '0.5rem', borderBottom: '1px solid #f1f5f9' }}>{ioc.context}</td>
+                        <td style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-subtle)', textTransform: 'uppercase' }}>{ioc.ioc_type}</td>
+                        <td style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-subtle)', wordBreak: 'break-all' }}>{ioc.value}</td>
+                        <td style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-subtle)' }}>{ioc.context}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -226,7 +226,7 @@ export default function Reports() {
               
             </>
           ) : (
-            <div style={{ textAlign: 'center', padding: '3rem', backgroundColor: '#f8fafc', color: '#64748b' }}>
+            <div style={{ textAlign: 'center', padding: '3rem', backgroundColor: 'var(--bg-surface-hover)', color: 'var(--text-secondary)' }}>
               <ShieldAlert size={48} style={{ margin: '0 auto 1rem auto', opacity: 0.5 }} />
               <p>Forensic analysis has not been completed for this email yet.</p>
             </div>
@@ -257,7 +257,7 @@ export default function Reports() {
               className="card" 
               style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', transition: 'background-color 0.2s' }}
               onClick={() => handleSelectReport(email.id)}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-dark)'}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-base)'}
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--surface-color)'}
             >
               <div style={{ flex: '1 1 auto', overflow: 'hidden' }}>
@@ -274,7 +274,7 @@ export default function Reports() {
                   onClick={(e) => { e.stopPropagation(); handleSelectReport(email.id); }}
                   disabled={reportLoading}
                 >
-                  {reportLoading && selectedReport?.id === email.id ? <Loader size={16} className="animate-spin" /> : <FileText size={16} />} 
+                  {reportLoading && selectedReport?.id === email.id ? <Loader size={16} className="animate-spin" /> : <FileText size={16} strokeWidth={1.5} />} 
                   View Report
                 </button>
               </div>

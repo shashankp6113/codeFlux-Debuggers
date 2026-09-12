@@ -12,11 +12,12 @@ export default function Login() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: 'var(--bg-dark)' }}>
-      <div className="card" style={{ padding: '3rem', display: 'flex', flexDirection: 'column', alignItems: 'center', maxWidth: '400px', width: '100%' }}>
-        <ShieldAlert size={48} color="#3b82f6" style={{ marginBottom: '1rem' }} />
-        <h1 style={{ marginBottom: '0.5rem', textAlign: 'center' }}>MailForensics AI</h1>
-        <p style={{ color: 'var(--text-secondary)', textAlign: 'center', marginBottom: '2rem' }}>
+    <div className="login-container">
+      <div className="login-glow"></div>
+      <div className="login-card">
+        <ShieldAlert size={32} strokeWidth={1.5} color="var(--accent-primary)" style={{ marginBottom: '24px' }} />
+        <h1 className="text-h1" style={{ marginBottom: '8px' }}>MailForensics AI</h1>
+        <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginBottom: '32px' }}>
           Sign in via Google to access your secure forensic workspace.
         </p>
         <GmailConnectButton onConnect={handleConnect} />

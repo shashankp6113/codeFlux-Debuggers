@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { Mail, AlertTriangle, ShieldAlert, Bug, Search, Activity, PieChart, Loader, Inbox, CheckCircle, RefreshCw } from 'lucide-react';
+import { Mail, AlertTriangle, ShieldAlert, Radar, Search, Activity, PieChart, Loader, Inbox, CheckCircle, RefreshCw } from 'lucide-react';
 import GmailConnectButton from '../components/GmailConnectButton';
 import UploadButton from '../components/UploadButton';
 
@@ -92,7 +92,7 @@ export default function Dashboard() {
   if (error && !data) {
     return (
       <div className="empty-state" style={{ minHeight: '60vh' }}>
-        <AlertTriangle size={48} color="#ef4444" className="empty-state-icon" />
+        <AlertTriangle size={48}  strokeWidth={1.5} />
         <h3>Error Loading Dashboard</h3>
         <p>{error}</p>
         <button className="btn-primary" onClick={() => window.location.reload()}>Retry</button>
@@ -140,11 +140,11 @@ export default function Dashboard() {
                 disabled={isSyncing}
                 style={{ opacity: isSyncing ? 0.7 : 1 }}
               >
-                <RefreshCw size={18} className={isSyncing ? "animate-spin" : ""} />
+                <RefreshCw size={16} strokeWidth={1.5} className={isSyncing ? "animate-spin" : ""} />
                 {isSyncing ? 'Syncing...' : 'Sync Gmail'}
               </button>
-              <button className="btn-primary" style={{ backgroundColor: '#22c55e', borderColor: '#22c55e', cursor: 'default' }} disabled>
-                <CheckCircle size={18} />
+              <button className="btn-success" style={{ cursor: 'default' }} disabled>
+                <CheckCircle size={16} strokeWidth={1.5} />
                 Connected
               </button>
             </div>
@@ -156,36 +156,24 @@ export default function Dashboard() {
       </div>
       
       {syncStatus && syncStatus.status !== 'idle' && (
-        <div style={{
-          backgroundColor: syncStatus.status === 'failed' ? 'rgba(239, 68, 68, 0.1)' : 
-                           syncStatus.status === 'completed' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(59, 130, 246, 0.1)',
-          border: `1px solid ${syncStatus.status === 'failed' ? '#ef4444' : 
-                               syncStatus.status === 'completed' ? '#22c55e' : '#3b82f6'}`,
-          borderRadius: '8px',
-          padding: '1rem',
-          marginBottom: '2rem',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}>
+        <div className={`sync-banner ${syncStatus.status === 'failed' ? 'sync-banner-error' : syncStatus.status === 'completed' ? 'sync-banner-success' : ''}`}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            {syncStatus.status === 'syncing' && <Loader size={24} color="#3b82f6" className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />}
-            {syncStatus.status === 'completed' && <CheckCircle size={24} color="#22c55e" />}
-            {syncStatus.status === 'failed' && <AlertTriangle size={24} color="#ef4444" />}
+            {syncStatus.status === 'syncing' && <Loader size={24}  className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />}
+            {syncStatus.status === 'completed' && <CheckCircle size={24}  />}
+            {syncStatus.status === 'failed' && <AlertTriangle size={24}  />}
             <div>
-              <h4 style={{ margin: 0, color: syncStatus.status === 'failed' ? '#ef4444' : 
-                                             syncStatus.status === 'completed' ? '#22c55e' : '#3b82f6' }}>
+              <h4 className="text-h2">
                 {syncStatus.status === 'syncing' ? 'Sync in Progress' : 
                  syncStatus.status === 'completed' ? 'Sync Completed' : 'Sync Failed'}
               </h4>
-              <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+              <p style={{ margin: 0, fontSize: '14px', color: 'var(--text-muted)' }}>
                 {syncStatus.processed} / {syncStatus.total_discovered} emails processed 
                 ({syncStatus.newly_added} added, {syncStatus.skipped_duplicate} skipped, {syncStatus.failed_count} failed).
               </p>
             </div>
           </div>
           {syncStatus.status === 'failed' && syncStatus.errors && syncStatus.errors.length > 0 && (
-             <div style={{ fontSize: '0.75rem', color: '#ef4444', maxWidth: '40%' }}>
+             <div style={{ fontSize: '12px', color: 'var(--status-critical-text)', maxWidth: '40%' }}>
                 {syncStatus.errors[0]}
              </div>
           )}
@@ -194,30 +182,30 @@ export default function Dashboard() {
 
       <div className="metrics-grid">
         <div className="metric-card">
-          <div className="metric-label">
-            <span>Total Emails</span>
-            <Mail size={16} />
+          <div className="metric-header">
+            <span className="metric-label">Total Emails</span>
+            <div className="metric-icon-wrap"><Mail size={16} strokeWidth={1.5} /></div>
           </div>
           <div className="metric-value">{total_emails}</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">
-            <span>Threats Detected</span>
-            <Bug size={16} color="#ef4444" />
+          <div className="metric-header">
+            <span className="metric-label">Threats Detected</span>
+            <div className="metric-icon-wrap"><Radar strokeWidth={1.5} size={16} strokeWidth={1.5}  /></div>
           </div>
           <div className="metric-value">{threats_detected}</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">
-            <span>High Risk</span>
-            <AlertTriangle size={16} color="#f59e0b" />
+          <div className="metric-header">
+            <span className="metric-label">High Risk</span>
+            <div className="metric-icon-wrap"><AlertTriangle size={16} strokeWidth={1.5}  /></div>
           </div>
           <div className="metric-value">{high_risk}</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">
-            <span>Critical</span>
-            <ShieldAlert size={16} color="#dc2626" />
+          <div className="metric-header">
+            <span className="metric-label">Critical</span>
+            <div className="metric-icon-wrap"><ShieldAlert size={16} strokeWidth={1.5}  /></div>
           </div>
           <div className="metric-value">{critical}</div>
         </div>
@@ -226,7 +214,7 @@ export default function Dashboard() {
       <div className="content-grid">
         <div className="card" style={{ minHeight: '350px' }}>
           <div className="card-title">
-            <Search size={18} />
+            <Search size={16} strokeWidth={1.5} />
             Recent Investigations
           </div>
           
@@ -236,26 +224,13 @@ export default function Dashboard() {
                 const aiClassification = inv.forensics?.ai_analysis?.classification || "unknown";
                 const isThreat = ["suspicious", "malicious", "phishing", "malware", "spam"].includes(aiClassification.toLowerCase());
                 return (
-                  <div key={inv.id} style={{ 
-                    padding: '1rem 0', 
-                    borderBottom: '1px solid var(--border-color)',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                  }}>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '1rem' }}>
-                      <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{inv.subject || "(No Subject)"}</div>
-                      <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{inv.sender}</div>
+                  <div key={inv.id} className="list-item">
+                    <div className="truncate" style={{ marginRight: '1rem' }}>
+                      <div className="truncate" style={{ fontWeight: 600 }}>{inv.subject || "(No Subject)"}</div>
+                      <div className="truncate text-small text-muted">{inv.sender}</div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexShrink: 0 }}>
-                      <span style={{ 
-                        padding: '4px 8px', 
-                        borderRadius: '4px', 
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        backgroundColor: isThreat ? 'rgba(239, 68, 68, 0.1)' : 'rgba(100, 116, 139, 0.1)',
-                        color: isThreat ? '#ef4444' : 'var(--text-primary)'
-                      }}>
+                      <span className={`badge ${isThreat ? 'badge-critical' : 'badge-neutral'}`}>
                         {aiClassification.toUpperCase()}
                       </span>
                       <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
@@ -268,12 +243,12 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="empty-state">
-              <Inbox size={48} className="empty-state-icon" />
+              <div className="empty-state-icon-wrap"><Inbox size={24} strokeWidth={1.5} /></div>
               {isConnected ? (
                 <>
                   <h3>Gmail connected — syncing emails...</h3>
                   <p>We are analyzing your inbox in the background. Results will appear here shortly.</p>
-                  <Loader size={32} color="#3b82f6" className="animate-spin" style={{ animation: 'spin 1s linear infinite', marginTop: '1rem' }} />
+                  <Loader size={32}  className="animate-spin" style={{ animation: 'spin 1s linear infinite', marginTop: '1rem' }} />
                 </>
               ) : (
                 <>
@@ -292,7 +267,7 @@ export default function Dashboard() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           <div className="card" style={{ flex: 1 }}>
             <div className="card-title">
-              <PieChart size={18} />
+              <PieChart size={16} strokeWidth={1.5} />
               Threat Distribution
             </div>
             {hasThreatDist ? (
@@ -300,7 +275,7 @@ export default function Dashboard() {
                 {Object.entries(threat_distribution).map(([key, count]) => (
                   <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ textTransform: 'capitalize' }}>{key}</span>
-                    <span style={{ fontWeight: 600, backgroundColor: 'var(--surface-color)', padding: '2px 8px', borderRadius: '12px' }}>{count}</span>
+                    <span className="badge badge-neutral">{count}</span>
                   </div>
                 ))}
               </div>
@@ -313,7 +288,7 @@ export default function Dashboard() {
           
           <div className="card" style={{ flex: 1 }}>
             <div className="card-title">
-              <Activity size={18} />
+              <Activity size={16} strokeWidth={1.5} />
               IOC Overview
             </div>
             {hasIocSummary ? (
@@ -321,7 +296,7 @@ export default function Dashboard() {
                 {Object.entries(ioc_summary).map(([key, count]) => (
                   <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ textTransform: 'uppercase' }}>{key}</span>
-                    <span style={{ fontWeight: 600, backgroundColor: 'var(--surface-color)', padding: '2px 8px', borderRadius: '12px' }}>{count}</span>
+                    <span className="badge badge-neutral">{count}</span>
                   </div>
                 ))}
               </div>

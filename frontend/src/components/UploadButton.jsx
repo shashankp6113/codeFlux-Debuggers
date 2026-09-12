@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, Loader } from 'lucide-react';
 import { api } from '../lib/api';
 
-export default function UploadButton({ label = "New Analysis", icon = <Plus size={18} />, className = "btn-primary" }) {
+export default function UploadButton({ label = "New Analysis", icon = <Plus size={16} strokeWidth={1.5} />, className = "btn-primary" }) {
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const navigate = useNavigate();
@@ -42,7 +42,7 @@ export default function UploadButton({ label = "New Analysis", icon = <Plus size
         onClick={() => fileInputRef.current?.click()}
         disabled={uploading}
       >
-        {uploading ? <Loader size={18} style={{ animation: 'spin 2s linear infinite' }} /> : icon}
+        {uploading ? <Loader size={16} strokeWidth={1.5} style={{ animation: 'spin 2s linear infinite' }} /> : icon}
         {uploading ? "Uploading..." : label}
       </button>
       

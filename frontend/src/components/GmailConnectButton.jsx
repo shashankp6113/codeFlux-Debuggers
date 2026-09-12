@@ -71,8 +71,8 @@ export default function GmailConnectButton({ onConnect }) {
 
   if (success) {
     return (
-      <button className="btn-primary" style={{ backgroundColor: '#22c55e', borderColor: '#22c55e' }} disabled>
-        <Check size={18} />
+      <button className="btn-primary" style={{ backgroundColor: 'var(--status-safe-text)', borderColor: 'var(--status-safe-text)' }} disabled>
+        <Check size={16} strokeWidth={1.5} />
         Connected
       </button>
     );
@@ -85,11 +85,11 @@ export default function GmailConnectButton({ onConnect }) {
         onClick={handleConnect} 
         disabled={loading}
       >
-        {loading ? <Loader size={18} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} /> : <Mail size={18} />}
+        {loading ? <Loader size={16} strokeWidth={1.5} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} /> : <Mail size={16} strokeWidth={1.5} />}
         {loading ? 'Connecting...' : 'Connect Gmail'}
       </button>
       {error && (
-        <div style={{ color: '#ef4444', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+        <div style={{ color: 'var(--status-critical-text)', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
           <AlertTriangle size={14} /> {error}
         </div>
       )}

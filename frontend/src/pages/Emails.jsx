@@ -54,7 +54,7 @@ export default function Emails() {
         <h1 className="page-title">Investigations</h1>
         <div className="card" style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="empty-state">
-            <AlertTriangle size={48} color="#ef4444" className="empty-state-icon" />
+            <AlertTriangle size={48} color="var(--status-critical-text)" className="empty-state-icon" />
             <h3>Error Loading Emails</h3>
             <p>{error}</p>
             <button className="btn-primary" onClick={() => window.location.reload()}>Retry</button>
@@ -70,7 +70,7 @@ export default function Emails() {
       
       <div className="card">
         <div className="search-container">
-          <Search size={18} className="search-icon" />
+          <Search size={16} strokeWidth={1.5} className="search-icon" />
           <input 
             type="text" 
             className="search-input" 
@@ -122,39 +122,32 @@ export default function Emails() {
                   
                   let riskColor = 'var(--text-secondary)';
                   if (riskLevel === 'critical') riskColor = '#dc2626';
-                  else if (riskLevel === 'high') riskColor = '#f59e0b';
+                  else if (riskLevel === 'high') riskColor = 'var(--status-high-text)';
                   else if (riskLevel === 'medium') riskColor = '#eab308';
-                  else if (riskLevel === 'low') riskColor = '#22c55e';
+                  else if (riskLevel === 'low') riskColor = 'var(--status-safe-text)';
 
                   return (
                     <tr key={email.id} onClick={() => navigate(`/emails/${email.id}`)}>
-                      <td style={{ fontWeight: 500, maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <td className="truncate" style={{ fontWeight: 500, maxWidth: '300px' }}>
                         {email.subject || "(No Subject)"}
                       </td>
-                      <td style={{ color: 'var(--text-secondary)', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <td className="truncate text-muted" style={{ maxWidth: '200px' }}>
                         {email.sender}
                       </td>
                       <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                         {new Date(email.received_at || email.created_at).toLocaleString()}
                       </td>
                       <td>
-                        <span style={{ 
-                          padding: '4px 8px', 
-                          borderRadius: '4px', 
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          backgroundColor: isThreatClass ? 'rgba(239, 68, 68, 0.1)' : 'rgba(100, 116, 139, 0.1)',
-                          color: isThreatClass ? '#ef4444' : 'var(--text-primary)'
-                        }}>
-                          {aiClass.toUpperCase()}
+                        <span className={`badge ${isThreatClass ? 'badge-critical' : 'badge-neutral'}`}>
+                          {aiClass}
                         </span>
                       </td>
                       <td>
-                        <span style={{ 
-                          color: riskColor,
-                          fontWeight: 500,
-                          textTransform: 'capitalize'
-                        }}>
+                        <span className={`badge ${
+                          riskLevel === 'critical' ? 'badge-critical' :
+                          riskLevel === 'high' ? 'badge-high' :
+                          riskLevel === 'low' ? 'badge-safe' : 'badge-neutral'
+                        }`}>
                           {riskLevel}
                         </span>
                       </td>
