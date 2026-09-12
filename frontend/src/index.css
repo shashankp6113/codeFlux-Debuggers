@@ -941,3 +941,6 @@ h2, .text-h2 {
   border: 1px solid var(--border-base);
   margin-left: 8px;
 }
+
+.threat-card-hover { transition: all 0.2s ease; }
+.threat-card-hover:hover { border-top-color: var(--primary-color); border-right-color: var(--primary-color); border-bottom-color: var(--primary-color); }

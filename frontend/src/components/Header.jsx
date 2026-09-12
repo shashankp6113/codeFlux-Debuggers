@@ -20,6 +20,7 @@ export default function Header({ toggleSidebar, collapsed }) {
   const [searchResults, setSearchResults] = useState(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchTimerRef = useRef(null);
+  const searchReqIdRef = useRef(0);
 
   const dropdownRef = useRef(null);
   const notifRef = useRef(null);

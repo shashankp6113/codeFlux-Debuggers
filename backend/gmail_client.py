@@ -236,8 +236,32 @@ def sync_gmail_messages(
         result.errors.append(str(exc))
         return result
 
+    # Bulk deduplication lookup
+    ref_ids = [r.id for r in refs]
+    from models import ForensicAnalysis
+    existing_emails = db_session.query(Email).filter(
+        Email.email_account_id == account_id,
+        Email.message_id.in_(ref_ids)
+    ).all()
+    existing_map = {e.message_id: e for e in existing_emails}
+    
+    analysis_set = set()
+    if existing_emails:
+        existing_analyses = db_session.query(ForensicAnalysis.email_id).filter(
+            ForensicAnalysis.email_id.in_([e.id for e in existing_emails])
+        ).all()
+        analysis_set = {fa[0] for fa in existing_analyses}
+
     for ref in refs:
         result.fetched += 1
+        
+        # Fast path deduplication before downloading raw bytes
+        existing = existing_map.get(ref.id)
+        if existing and existing.id in analysis_set:
+            result.skipped_duplicate += 1
+            record_progress(account_id, skipped=1)
+            continue
+            
         try:
             raw_bytes = get_raw_message(access_token, ref.id)
             parsed = convert_raw_to_parsed(raw_bytes)
@@ -248,19 +272,8 @@ def sync_gmail_messages(
             record_progress(account_id, failed=1)
             continue
 
-        # Use Gmail's immutable ID for stable deduplication
-        existing = db_session.query(Email).filter_by(
-            email_account_id=account_id,
-            message_id=ref.id,
-        ).first()
-        
         if existing:
-            from models import ForensicAnalysis
-            has_analysis = db_session.query(ForensicAnalysis).filter_by(
-                email_id=existing.id
-            ).first() is not None
-
-            if has_analysis:
+            if existing.id in analysis_set:
                 result.skipped_duplicate += 1
                 record_progress(account_id, skipped=1)
                 continue

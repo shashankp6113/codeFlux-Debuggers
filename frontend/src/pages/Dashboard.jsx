@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Mail, AlertTriangle, ShieldAlert, Radar, Search, Activity, PieChart, Loader, Inbox, CheckCircle, RefreshCw } from 'lucide-react';
@@ -11,19 +11,29 @@ export default function Dashboard() {
   const [error, setError] = useState(null);
   
   // Sync state
+    const syncTimerRef = useRef(null);
+  const isMountedRef = useRef(true);
+
   const [syncStatus, setSyncStatus] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const { emailAccountId, updateEmailAccountId } = useAuth();
   const isConnected = !!emailAccountId;
 
   useEffect(() => {
+    isMountedRef.current = true;
     fetchDashboard();
     
-    // Check if there's an ongoing sync for the current account
     const activeAccountId = emailAccountId;
     if (activeAccountId) {
       checkSyncStatus(activeAccountId);
     }
+    
+    return () => {
+      isMountedRef.current = false;
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
+      }
+    };
   }, []);
 
   const fetchDashboard = async () => {
@@ -45,10 +55,14 @@ export default function Dashboard() {
       const status = await api.getSyncStatus(accountId);
       setSyncStatus(status);
       
+      if (!isMountedRef.current) return;
+      
       if (status && status.status === 'syncing') {
         setIsSyncing(true);
         // Poll every 3 seconds
-        setTimeout(() => checkSyncStatus(accountId), 3000);
+        syncTimerRef.current = setTimeout(() => {
+          if (isMountedRef.current) checkSyncStatus(accountId);
+        }, 3000);
       } else {
         setIsSyncing(false);
         fetchDashboard();

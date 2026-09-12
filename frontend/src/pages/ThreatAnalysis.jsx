@@ -77,7 +77,6 @@ export default function ThreatAnalysis() {
               <option value="spam">Spam</option>
             </select>
             
-            <button type="submit" className="btn-secondary">Apply Filters</button>
           </div>
         </form>
       </div>
@@ -104,11 +103,9 @@ export default function ThreatAnalysis() {
           {threats.map(threat => (
             <div 
               key={threat.id} 
-              className="card" 
+              className="card threat-card-hover" 
               style={{ cursor: 'pointer', borderLeft: `4px solid ${getRiskColor(threat.risk_level)}` }}
               onClick={() => navigate(`/emails/${threat.id}`)}
-              onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--primary-color)'}
-              onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--border-base)'}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
                 <div style={{ flex: '1 1 300px' }}>
