@@ -229,13 +229,20 @@ class VirusTotalProvider(ThreatIntelProvider):
 
     _BASE_URL = "https://www.virustotal.com/api/v3"
     _TIMEOUT = 15  # seconds
+    
+    # Process-level state to respect rate limits and deduplicate network requests
+    # across multiple VirusTotalProvider instantiations in the SIH prototype.
+    _global_rate_limited_until: float = 0.0
+    _global_cache = {}  # type: ignore
+    _state_lock = __import__("threading").Lock()
+    _CACHE_MAX_SIZE = 1000
+    _CACHE_TTL = 3600  # 1 hour
 
     def __init__(self) -> None:
         import os
         import httpx
         self._api_key: Optional[str] = os.environ.get("VIRUSTOTAL_API_KEY")
         self._client = httpx.Client(timeout=self._TIMEOUT)
-        self._rate_limited_until: float = 0.0
 
     def close(self) -> None:
         self._client.close()
@@ -257,18 +264,38 @@ class VirusTotalProvider(ThreatIntelProvider):
                 provider=self.name,
                 error="VIRUSTOTAL_API_KEY environment variable is not set",
             )
-        
-        if time.time() < self._rate_limited_until:
-            return EnrichmentResult(
-                ioc_type=ioc_type,
-                ioc_value=ioc_value,
-                verdict="not_enriched",
-                provider=self.name,
-                error="VirusTotal API rate limit exceeded (cooldown active)",
-            )
+            
+        with VirusTotalProvider._state_lock:
+            if time.time() < VirusTotalProvider._global_rate_limited_until:
+                return EnrichmentResult(
+                    ioc_type=ioc_type,
+                    ioc_value=ioc_value,
+                    verdict="not_enriched",
+                    provider=self.name,
+                    error="VirusTotal API rate limit exceeded (cooldown active)",
+                )
+            
+            # Check global cache BEFORE making network request
+            cache_key = (ioc_type, ioc_value.lower())
+            cached = VirusTotalProvider._global_cache.get(cache_key)
+            if cached is not None:
+                expiry, cached_result = cached
+                if time.time() < expiry:
+                    return cached_result
+                else:
+                    del VirusTotalProvider._global_cache[cache_key]
 
         try:
-            return self._do_enrich(ioc_type, ioc_value)
+            result = self._do_enrich(ioc_type, ioc_value)
+            
+            # Cache ONLY successful enrichments (no transient errors)
+            if result.error is None:
+                with VirusTotalProvider._state_lock:
+                    if len(VirusTotalProvider._global_cache) >= VirusTotalProvider._CACHE_MAX_SIZE:
+                        VirusTotalProvider._global_cache.pop(next(iter(VirusTotalProvider._global_cache)))
+                    VirusTotalProvider._global_cache[cache_key] = (time.time() + VirusTotalProvider._CACHE_TTL, result)
+                    
+            return result
         except Exception as exc:
             return EnrichmentResult(
                 ioc_type=ioc_type,
@@ -294,7 +321,8 @@ class VirusTotalProvider(ThreatIntelProvider):
             else:
                 cooldown = 60
             
-            self._rate_limited_until = time.time() + cooldown
+            with VirusTotalProvider._state_lock:
+                VirusTotalProvider._global_rate_limited_until = time.time() + cooldown
 
             return EnrichmentResult(
                 ioc_type=ioc_type,

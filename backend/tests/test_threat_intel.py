@@ -1338,8 +1338,8 @@ class TestVirusTotalRateLimiting:
         monkeypatch.setattr("httpx.Client.get", _mock_get)
         
         p.enrich("ipv4", "1.1.1.1")
-        assert p._rate_limited_until > time.time() + 9
-        assert p._rate_limited_until <= time.time() + 11
+        assert p.__class__._global_rate_limited_until > time.time() + 9
+        assert p.__class__._global_rate_limited_until <= time.time() + 11
 
     def test_fallback_cooldown_is_60(self, monkeypatch):
         import time
@@ -1351,8 +1351,8 @@ class TestVirusTotalRateLimiting:
         monkeypatch.setattr("httpx.Client.get", _mock_get)
         
         p.enrich("ipv4", "1.1.1.1")
-        assert p._rate_limited_until > time.time() + 59
-        assert p._rate_limited_until <= time.time() + 61
+        assert p.__class__._global_rate_limited_until > time.time() + 59
+        assert p.__class__._global_rate_limited_until <= time.time() + 61
 
 
 class TestProviderLifecycle:
@@ -1388,3 +1388,192 @@ class TestProviderLifecycle:
         enrich_iocs(iocs, provider=p)
         
         assert closed
+
+
+# ---------------------------------------------------------------------------
+# Global VT Cache and Rate-Limiting Tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def clear_vt_cache():
+    from threat_intel import VirusTotalProvider
+    VirusTotalProvider._global_cache.clear()
+    VirusTotalProvider._global_rate_limited_until = 0.0
+    yield
+
+class _FakeResp:
+    def __init__(self, status_code, json_data=None, headers=None):
+        self.status_code = status_code
+        self._json = json_data or {}
+        self.headers = headers or {}
+        
+    def json(self):
+        return self._json
+        
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise Exception("HTTP Error")
+
+def test_vt_cache_reuses_previous_result(monkeypatch):
+    from threat_intel import VirusTotalProvider
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test_key")
+    
+    calls = []
+    def _mock_get(self, url, **kwargs):
+        calls.append(url)
+        return _FakeResp(200, {"data": {"attributes": {"last_analysis_stats": {"malicious": 10}}}})
+        
+    import httpx
+    monkeypatch.setattr(httpx.Client, "get", _mock_get)
+    
+    # Instance 1
+    p1 = VirusTotalProvider()
+    res1 = p1.enrich("domain", "test.com")
+    assert res1.verdict == "malicious"
+    assert len(calls) == 1
+    
+    # Instance 2
+    p2 = VirusTotalProvider()
+    res2 = p2.enrich("domain", "test.com")
+    assert res2.verdict == "malicious"
+    
+    # Verify NO SECOND CALL
+    assert len(calls) == 1
+
+def test_vt_cache_distinguishes_iocs(monkeypatch):
+    from threat_intel import VirusTotalProvider
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test_key")
+    
+    calls = []
+    def _mock_get(self, url, **kwargs):
+        calls.append(url)
+        return _FakeResp(200, {"data": {"attributes": {"last_analysis_stats": {"malicious": 10}}}})
+        
+    import httpx
+    monkeypatch.setattr(httpx.Client, "get", _mock_get)
+    
+    p = VirusTotalProvider()
+    p.enrich("domain", "a.com")
+    p.enrich("domain", "b.com")
+    p.enrich("ipv4", "a.com") # Same value, different type
+    
+    assert len(calls) == 3
+
+def test_vt_rate_limit_shared_across_instances(monkeypatch):
+    from threat_intel import VirusTotalProvider
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test_key")
+    
+    calls = []
+    def _mock_get(self, url, **kwargs):
+        calls.append(url)
+        return _FakeResp(429)
+        
+    import httpx
+    monkeypatch.setattr(httpx.Client, "get", _mock_get)
+    
+    # First provider triggers the 429 and establishes cooldown
+    p1 = VirusTotalProvider()
+    res1 = p1.enrich("domain", "x.com")
+    assert res1.verdict == "not_enriched"
+    assert "rate limit exceeded" in res1.error
+    assert len(calls) == 1
+    
+    # Second provider respects the cooldown without making a request
+    p2 = VirusTotalProvider()
+    res2 = p2.enrich("domain", "y.com")
+    assert res2.verdict == "not_enriched"
+    assert "cooldown active" in res2.error
+    assert len(calls) == 1  # Still 1!
+
+def test_vt_retry_after_is_respected(monkeypatch):
+    from threat_intel import VirusTotalProvider
+    import time
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test_key")
+    
+    def _mock_get(self, url, **kwargs):
+        return _FakeResp(429, headers={"Retry-After": "120"})
+        
+    import httpx
+    monkeypatch.setattr(httpx.Client, "get", _mock_get)
+    
+    p = VirusTotalProvider()
+    start_time = time.time()
+    p.enrich("domain", "retry.com")
+    
+    # The rate limit should be ~120 seconds in the future
+    assert VirusTotalProvider._global_rate_limited_until >= start_time + 119
+
+def test_vt_transient_failure_not_cached(monkeypatch):
+    from threat_intel import VirusTotalProvider
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test_key")
+    
+    calls = []
+    def _mock_get(self, url, **kwargs):
+        calls.append(url)
+        return _FakeResp(500)
+        
+    import httpx
+    monkeypatch.setattr(httpx.Client, "get", _mock_get)
+    
+    p = VirusTotalProvider()
+    res1 = p.enrich("domain", "fail.com")
+    assert res1.error is not None
+    
+    # Should not be cached, so second call triggers another request
+    res2 = p.enrich("domain", "fail.com")
+    assert res2.error is not None
+    assert len(calls) == 2
+
+def test_vt_cache_ttl_expiry(monkeypatch):
+    from threat_intel import VirusTotalProvider
+    import time
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test_key")
+    
+    calls = []
+    def _mock_get(self, url, **kwargs):
+        calls.append(url)
+        return _FakeResp(200, {"data": {"attributes": {"last_analysis_stats": {"malicious": 0, "harmless": 5}}}})
+        
+    import httpx
+    monkeypatch.setattr(httpx.Client, "get", _mock_get)
+    
+    p = VirusTotalProvider()
+    p.enrich("domain", "expire.com")
+    assert len(calls) == 1
+    
+    # artificially expire it
+    cache_key = ("domain", "expire.com")
+    old_expiry, res = VirusTotalProvider._global_cache[cache_key]
+    VirusTotalProvider._global_cache[cache_key] = (time.time() - 10, res)
+    
+    p.enrich("domain", "expire.com")
+    assert len(calls) == 2
+
+def test_enrichment_across_multiple_emails(monkeypatch):
+    import analysis
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test_key")
+    
+    calls = []
+    def _mock_get(self, url, **kwargs):
+        calls.append(url)
+        return _FakeResp(200, {"data": {"attributes": {"last_analysis_stats": {"malicious": 10}}}})
+        
+    import httpx
+    monkeypatch.setattr(httpx.Client, "get", _mock_get)
+    
+    from ioc_extractor import IOCExtractionResult, IOC
+    from threat_intel import enrich_iocs, get_provider
+    
+    ioc_res = IOCExtractionResult(iocs=[IOC(ioc_type="domain", value="shared.com", source="body_text", context="")], stats={"domain":1})
+    
+    # Email 1
+    provider1 = get_provider()
+    res1 = enrich_iocs(ioc_res, provider=provider1)
+    
+    # Email 2
+    provider2 = get_provider()
+    res2 = enrich_iocs(ioc_res, provider=provider2)
+    
+    assert len(calls) == 1
+    assert res1.enrichments[0].verdict == "malicious"
+    assert res2.enrichments[0].verdict == "malicious"

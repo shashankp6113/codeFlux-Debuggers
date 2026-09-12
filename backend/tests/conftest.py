@@ -34,3 +34,12 @@ def _prevent_live_gemini_calls(monkeypatch):
     # Also override getting the AI provider to NoOp by default unless explicitly tested
     # Some tests set GEMINI_API_KEY to test the provider factory, which is fine,
     # because if they try to use it, the httpx.post mock above will catch it.
+
+
+@pytest.fixture(autouse=True)
+def clear_vt_cache():
+    from threat_intel import VirusTotalProvider
+    if hasattr(VirusTotalProvider, "_global_cache"):
+        VirusTotalProvider._global_cache.clear()
+        VirusTotalProvider._global_rate_limited_until = 0.0
+    yield

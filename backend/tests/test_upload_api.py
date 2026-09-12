@@ -1167,9 +1167,9 @@ class TestUploadProviderIntegration:
         """If VT provider errors, upload still succeeds with error info."""
         monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test-key")
         import httpx as _httpx
-        def _mock_timeout(*args, **kwargs):
+        def _mock_timeout(self, url, **kwargs):
             raise _httpx.TimeoutException("timed out")
-        monkeypatch.setattr("httpx.get", _mock_timeout)
+        monkeypatch.setattr("httpx.Client.get", _mock_timeout)
         r = self._upload()
         assert r.status_code == 200
         ti = r.json()["forensics"]["threat_intelligence"]
@@ -1184,7 +1184,7 @@ class TestUploadProviderIntegration:
         monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test-key")
         # Track that httpx.get is actually called (VT provider used)
         calls = []
-        def _mock_get(*args, **kwargs):
+        def _mock_get(self, url, **kwargs):
             calls.append(True)
             class _Resp:
                 status_code = 200
@@ -1196,6 +1196,12 @@ class TestUploadProviderIntegration:
                     pass
             return _Resp()
         monkeypatch.setattr("httpx.Client.get", _mock_get)
+        
+        # CLEAR CACHE to prevent test state pollution
+        from threat_intel import VirusTotalProvider
+        VirusTotalProvider._global_cache.clear()
+        VirusTotalProvider._global_rate_limited_until = 0.0
+
         r = self._upload()
         assert r.status_code == 200
         # If there are enrichable IOCs, httpx.get should have been called
