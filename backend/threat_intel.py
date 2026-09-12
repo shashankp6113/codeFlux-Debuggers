@@ -138,6 +138,16 @@ class ThreatIntelProvider(abc.ABC):
         """Unique human-readable provider name (e.g. ``"virustotal"``)."""
         ...
 
+    def close(self) -> None:
+        """Clean up any HTTP client connections or resources."""
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
     @abc.abstractmethod
     def enrich(self, ioc_type: str, ioc_value: str) -> EnrichmentResult:
         """Enrich a single IOC and return the result.
@@ -222,7 +232,13 @@ class VirusTotalProvider(ThreatIntelProvider):
 
     def __init__(self) -> None:
         import os
+        import httpx
         self._api_key: Optional[str] = os.environ.get("VIRUSTOTAL_API_KEY")
+        self._client = httpx.Client(timeout=self._TIMEOUT)
+        self._rate_limited_until: float = 0.0
+
+    def close(self) -> None:
+        self._client.close()
 
     @property
     def name(self) -> str:
@@ -232,6 +248,7 @@ class VirusTotalProvider(ThreatIntelProvider):
         return ioc_type in {"ipv4", "ipv6", "domain", "url"}
 
     def enrich(self, ioc_type: str, ioc_value: str) -> EnrichmentResult:
+        import time
         if not self._api_key:
             return EnrichmentResult(
                 ioc_type=ioc_type,
@@ -239,6 +256,15 @@ class VirusTotalProvider(ThreatIntelProvider):
                 verdict="not_enriched",
                 provider=self.name,
                 error="VIRUSTOTAL_API_KEY environment variable is not set",
+            )
+        
+        if time.time() < self._rate_limited_until:
+            return EnrichmentResult(
+                ioc_type=ioc_type,
+                ioc_value=ioc_value,
+                verdict="not_enriched",
+                provider=self.name,
+                error="VirusTotal API rate limit exceeded (cooldown active)",
             )
 
         try:
@@ -255,14 +281,21 @@ class VirusTotalProvider(ThreatIntelProvider):
     # ------------------------------------------------------------------
 
     def _do_enrich(self, ioc_type: str, ioc_value: str) -> EnrichmentResult:
-        import httpx
-
+        import time
         url = self._build_url(ioc_type, ioc_value)
         headers = {"x-apikey": self._api_key}
 
-        resp = httpx.get(url, headers=headers, timeout=self._TIMEOUT)
+        resp = self._client.get(url, headers=headers)
 
         if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after and retry_after.isdigit():
+                cooldown = int(retry_after)
+            else:
+                cooldown = 60
+            
+            self._rate_limited_until = time.time() + cooldown
+
             return EnrichmentResult(
                 ioc_type=ioc_type,
                 ioc_value=ioc_value,
@@ -431,34 +464,35 @@ def enrich_iocs(
     enrichments: List[EnrichmentResult] = []
     seen: Dict[tuple, None] = {}  # dedup by (type, normalised_value)
 
-    for ioc in ioc_result.iocs:
-        # Skip non-enrichable types (e.g. email)
-        if ioc.ioc_type not in _ENRICHABLE_TYPES:
-            continue
+    with provider:
+        for ioc in ioc_result.iocs:
+            # Skip non-enrichable types (e.g. email)
+            if ioc.ioc_type not in _ENRICHABLE_TYPES:
+                continue
 
-        # Skip types this specific provider does not support
-        if not provider.supports(ioc.ioc_type):
-            continue
+            # Skip types this specific provider does not support
+            if not provider.supports(ioc.ioc_type):
+                continue
 
-        # Deduplicate — same value may appear in multiple sources
-        dedup_key = (ioc.ioc_type, ioc.value.lower())
-        if dedup_key in seen:
-            continue
-        seen[dedup_key] = None
+            # Deduplicate — same value may appear in multiple sources
+            dedup_key = (ioc.ioc_type, ioc.value.lower())
+            if dedup_key in seen:
+                continue
+            seen[dedup_key] = None
 
-        # Call the provider, catching any unexpected exception
-        try:
-            result = provider.enrich(ioc.ioc_type, ioc.value)
-        except Exception as exc:
-            result = EnrichmentResult(
-                ioc_type=ioc.ioc_type,
-                ioc_value=ioc.value,
-                verdict="not_enriched",
-                provider=provider.name,
-                error=f"Provider error: {exc}",
-            )
+            # Call the provider, catching any unexpected exception
+            try:
+                result = provider.enrich(ioc.ioc_type, ioc.value)
+            except Exception as exc:
+                result = EnrichmentResult(
+                    ioc_type=ioc.ioc_type,
+                    ioc_value=ioc.value,
+                    verdict="not_enriched",
+                    provider=provider.name,
+                    error=f"Provider error: {exc}",
+                )
 
-        enrichments.append(result)
+            enrichments.append(result)
 
     # Build verdict stats
     stats: Dict[str, int] = {}

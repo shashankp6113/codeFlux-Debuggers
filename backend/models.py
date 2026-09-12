@@ -1,4 +1,4 @@
-from sqlalchemy import Column,Integer,String,Text,DateTime,ForeignKey,JSON
+from sqlalchemy import Column,Integer,String,Text,DateTime,ForeignKey,JSON,UniqueConstraint
 from sqlalchemy.orm import declarative_base,relationship
 from datetime import datetime
 
@@ -32,6 +32,10 @@ class EmailAccount(Base):
 
 class Email(Base):
     __tablename__="emails"
+    
+    __table_args__ = (
+        UniqueConstraint('email_account_id', 'message_id', name='uq_email_account_message'),
+    )
 
     id=Column(Integer,primary_key=True,index=True)
     email_account_id=Column(Integer,ForeignKey("email_accounts.id"),nullable=False)

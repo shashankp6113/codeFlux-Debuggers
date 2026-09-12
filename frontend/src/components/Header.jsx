@@ -1,6 +1,9 @@
-import { Bell, Search, Settings, User } from 'lucide-react';
+import { Bell, Search, Settings, LogOut } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function Header() {
+  const { logout } = useAuth();
+  
   return (
     <header className="top-header">
       <div className="header-title">
@@ -16,8 +19,8 @@ export default function Header() {
         <button className="icon-btn" aria-label="Settings">
           <Settings size={20} />
         </button>
-        <button className="icon-btn" aria-label="Profile">
-          <User size={20} />
+        <button className="icon-btn" aria-label="Logout" onClick={logout} title="Logout">
+          <LogOut size={20} />
         </button>
       </div>
     </header>

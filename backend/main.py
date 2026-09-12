@@ -1,14 +1,18 @@
+import secrets
+from sync_manager import get_sync_status, start_sync, finish_sync, SyncStatusResponse
+
 from dataclasses import asdict
 
 from typing import List, Optional
 
-from fastapi import FastAPI, Depends, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, Request, Response, Depends, File, Form, HTTPException, UploadFile, BackgroundTasks
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db
+from auth import create_access_token, get_current_user
 from models import Email, EmailAccount, User, ForensicAnalysis as ForensicAnalysisRecord
-from schemas import EmailResponse, ForensicAnalysisSchema, DashboardSummarySchema
+from schemas import EmailResponse, ForensicAnalysisSchema, DashboardSummarySchema, ThreatSummaryResponse, IOCsPageResponse
 from email_parser import parse_eml
 from analysis import run_email_analysis
 from gmail_oauth import (
@@ -37,42 +41,87 @@ def db_test(db: Session=Depends(get_db)):
 # Gmail OAuth 2.0 endpoints
 # ---------------------------------------------------------------------------
 
+
+_OAUTH_STATE_COOKIE = "oauth_state"
+_OAUTH_STATE_MAX_AGE = 600
+
 @app.get("/api/auth/gmail")
-def gmail_auth_redirect():
+def gmail_auth_redirect(request: Request):
     """Redirect the user to Google's OAuth 2.0 authorization page."""
     try:
         config = get_oauth_config()
     except OAuthConfigError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    url = build_authorization_url(config)
-    return RedirectResponse(url=url)
+    state = secrets.token_urlsafe(32)
+    url = build_authorization_url(config, state=state)
+    
+    response = RedirectResponse(url=url)
+    
+    is_secure = request.url.scheme == "https"
+    
+    response.set_cookie(
+        key=_OAUTH_STATE_COOKIE,
+        value=state,
+        max_age=_OAUTH_STATE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=is_secure,
+        path="/api/auth/gmail/callback"
+    )
+    return response
 
 
 @app.get("/api/auth/gmail/callback")
 def gmail_auth_callback(
+    request: Request,
+    response: Response,
     code: str = None,
     error: str = None,
+    state: str = None,
     db: Session = Depends(get_db),
 ):
-    """Handle Google's OAuth 2.0 callback.
+    """Handle Google's OAuth 2.0 callback."""
 
-    Exchanges the authorization code for tokens, fetches the user's
-    Gmail address, and creates or updates the corresponding
-    EmailAccount record.
-    """
-    # Handle user denial or Google-side errors
-    if error:
+    # Helper to raise exception and clear cookie
+    def raise_oauth_error(detail: str):
+        response.delete_cookie(
+            key=_OAUTH_STATE_COOKIE,
+            path="/api/auth/gmail/callback",
+            httponly=True,
+            samesite="lax"
+        )
         raise HTTPException(
             status_code=400,
-            detail=f"OAuth authorization failed: {error}",
+            detail=detail,
+            headers={"Set-Cookie": f"{_OAUTH_STATE_COOKIE}=; Max-Age=0; Path=/api/auth/gmail/callback; HttpOnly; SameSite=lax"}
         )
+
+    stored_state = request.cookies.get(_OAUTH_STATE_COOKIE)
+    
+    response.delete_cookie(
+        key=_OAUTH_STATE_COOKIE,
+        path="/api/auth/gmail/callback",
+        httponly=True,
+        samesite="lax"
+    )
+    
+    if not stored_state:
+        raise_oauth_error("Missing or expired OAuth state cookie")
+    
+    if not state:
+        raise_oauth_error("Missing OAuth state parameter")
+        
+    if not secrets.compare_digest(stored_state, state):
+        raise_oauth_error("Invalid OAuth state parameter (CSRF protection)")
+
+    if error:
+        raise_oauth_error(f"OAuth authorization failed: {error}")
 
     if not code:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing authorization code",
-        )
+        raise_oauth_error("Missing authorization code")
+
+
 
     # Load config
     try:
@@ -139,12 +188,17 @@ def gmail_auth_callback(
     db.commit()
     db.refresh(account)
 
-    # Return success — NEVER expose tokens in the response
+    # Generate application JWT
+    token = create_access_token(user.id)
+
+    # Return success — NEVER expose Google OAuth tokens in the response
     return {
         "message": "Gmail account authorized successfully",
         "email_account_id": account.id,
         "email_address": account.email_address,
         "provider": account.provider,
+        "token": token,
+        "user_id": user.id,
     }
 
 # ---------------------------------------------------------------------------
@@ -152,9 +206,9 @@ def gmail_auth_callback(
 # ---------------------------------------------------------------------------
 
 @app.get("/api/emails", response_model=List[EmailResponse])
-def list_emails(limit: int = 50, db: Session = Depends(get_db)):
+def list_emails(limit: int = 50, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Return a list of persisted emails, newest first."""
-    emails = db.query(Email).order_by(Email.received_at.desc()).limit(limit).all()
+    emails = db.query(Email).join(EmailAccount).filter(EmailAccount.user_id == current_user.id).order_by(Email.received_at.desc()).limit(limit).all()
     responses = []
     for email in emails:
         resp = EmailResponse.model_validate(email)
@@ -165,15 +219,278 @@ def list_emails(limit: int = 50, db: Session = Depends(get_db)):
     return responses
 
 
+
+
+
+@app.get("/api/emails/{email_id}", response_model=EmailResponse)
+def get_email(
+    email_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retrieve a specific email and its forensic analysis."""
+    email = (
+        db.query(Email)
+        .join(EmailAccount)
+        .filter(Email.id == email_id, EmailAccount.user_id == current_user.id)
+        .first()
+    )
+    
+    if not email:
+        raise HTTPException(status_code=404, detail="Email not found")
+        
+    resp = EmailResponse.model_validate(email)
+    fa = db.query(ForensicAnalysisRecord).filter_by(email_id=email.id).first()
+    if fa and fa.analysis:
+        resp.forensics = ForensicAnalysisSchema.model_validate(fa.analysis)
+        
+    return resp
+
+@app.get("/api/emails/{email_id}/report", response_model=EmailResponse)
+def get_email_report(
+    email_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retrieve a full forensic report for a specific email."""
+    email = (
+        db.query(Email)
+        .join(EmailAccount)
+        .filter(Email.id == email_id, EmailAccount.user_id == current_user.id)
+        .first()
+    )
+    
+    if not email:
+        raise HTTPException(status_code=404, detail="Email report not found")
+        
+    resp = EmailResponse.model_validate(email)
+    fa = db.query(ForensicAnalysisRecord).filter_by(email_id=email.id).first()
+    if fa and fa.analysis:
+        resp.forensics = ForensicAnalysisSchema.model_validate(fa.analysis)
+        
+    return resp
+
+@app.get("/api/threats", response_model=List[ThreatSummaryResponse])
+def list_threats(
+    risk_level: Optional[str] = None,
+    classification: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return a list of analyzed emails identified as potential threats."""
+    query = (
+        db.query(Email, ForensicAnalysisRecord)
+        .join(EmailAccount)
+        .join(ForensicAnalysisRecord, Email.id == ForensicAnalysisRecord.email_id)
+        .filter(EmailAccount.user_id == current_user.id)
+    )
+
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            (Email.sender.ilike(search_term)) | 
+            (Email.subject.ilike(search_term))
+        )
+
+    results = query.order_by(Email.received_at.desc()).all()
+    
+    threats = []
+    for email, fa in results:
+        if not fa or not fa.analysis:
+            continue
+            
+        analysis = fa.analysis
+        
+        t_score = analysis.get("threat_score", {})
+        score = t_score.get("score", 0)
+        risk = t_score.get("risk_level", "low").lower()
+        
+        ai = analysis.get("ai_analysis", {})
+        cls_type = ai.get("classification", "unknown").lower()
+        conf = ai.get("confidence", 0.0)
+        
+        flags = analysis.get("flags", [])
+        
+        iocs = []
+        if analysis.get("ioc_extraction"):
+            iocs = analysis.get("ioc_extraction").get("iocs", [])
+            
+        # Default filtering logic: must be considered a threat by score or AI
+        # unless explicit filters override
+        is_threat = (score > 0 or risk in ["medium", "high", "critical"] or cls_type in ["suspicious", "phishing", "malicious", "malware"])
+        
+        if risk_level and risk != risk_level.lower():
+            continue
+            
+        if classification and cls_type != classification.lower():
+            continue
+            
+        if not risk_level and not classification and not search and not is_threat:
+            # If no filters provided, only show actual threats
+            continue
+            
+        threats.append({
+            "id": email.id,
+            "subject": email.subject,
+            "sender": email.sender,
+            "received_at": email.received_at,
+            "threat_score": score,
+            "risk_level": risk,
+            "classification": cls_type,
+            "confidence": conf,
+            "flag_count": len(flags),
+            "ioc_count": len(iocs)
+        })
+        
+    return threats
+
+
+@app.get("/api/iocs", response_model=IOCsPageResponse)
+def list_iocs(
+    ioc_type: Optional[str] = None,
+    verdict: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return aggregated IOCs from the authenticated user's emails."""
+    query = (
+        db.query(Email, ForensicAnalysisRecord)
+        .join(EmailAccount)
+        .join(ForensicAnalysisRecord, Email.id == ForensicAnalysisRecord.email_id)
+        .filter(EmailAccount.user_id == current_user.id)
+    )
+
+    results = query.all()
+    
+    iocs_map = {}
+    
+    for email, fa in results:
+        if not fa or not fa.analysis:
+            continue
+            
+        analysis = fa.analysis
+        
+        # Extract IOCs
+        extracted = analysis.get("ioc_extraction", {}).get("iocs", [])
+        if not extracted:
+            continue
+            
+        # Get Threat Intel to merge
+        ti_enrichments = analysis.get("threat_intelligence", {}).get("enrichments", [])
+        ti_map = { e.get("ioc_value"): e for e in ti_enrichments }
+        
+        # Get Geolocation to merge
+        geo_results = analysis.get("geolocation", {}).get("results", [])
+        geo_map = { g.get("ip"): g for g in geo_results }
+        
+        for ioc in extracted:
+            val = ioc.get("value")
+            typ = ioc.get("ioc_type")
+            if not val or not typ:
+                continue
+                
+            if val not in iocs_map:
+                iocs_map[val] = {
+                    "ioc_type": typ,
+                    "value": val,
+                    "occurrence_count": 0,
+                    "emails": set(),
+                    "latest_email_id": email.id,
+                    "first_seen": email.received_at,
+                    "last_seen": email.received_at,
+                    "verdict": "unknown",
+                    "confidence": None,
+                    "country": None,
+                    "asn": None,
+                    "organization": None
+                }
+            
+            agg = iocs_map[val]
+            agg["occurrence_count"] += 1
+            
+            # Update emails set and last/first seen
+            agg["emails"].add(email.id)
+            
+            if email.received_at:
+                if not agg["last_seen"] or email.received_at > agg["last_seen"]:
+                    agg["last_seen"] = email.received_at
+                    agg["latest_email_id"] = email.id
+                if not agg["first_seen"] or email.received_at < agg["first_seen"]:
+                    agg["first_seen"] = email.received_at
+                    
+            # Merge Threat Intel
+            if val in ti_map:
+                ti = ti_map[val]
+                agg["verdict"] = ti.get("verdict", agg["verdict"])
+                if ti.get("confidence") is not None:
+                    agg["confidence"] = ti.get("confidence")
+                if ti.get("country"):
+                    agg["country"] = ti.get("country")
+                if ti.get("asn"):
+                    agg["asn"] = ti.get("asn")
+                if ti.get("organization"):
+                    agg["organization"] = ti.get("organization")
+                    
+            # Merge Geolocation if not already set by TI
+            if val in geo_map:
+                geo = geo_map[val]
+                if not agg["country"] and geo.get("country"):
+                    agg["country"] = geo.get("country")
+                if not agg["asn"] and geo.get("asn"):
+                    agg["asn"] = geo.get("asn")
+                if not agg["organization"] and geo.get("organization"):
+                    agg["organization"] = geo.get("organization")
+
+    # Finalize list and apply filters
+    final_iocs = []
+    stats = {
+        "total": 0,
+        "ip": 0,
+        "domain": 0,
+        "url": 0,
+        "email": 0
+    }
+    
+    for val, agg in iocs_map.items():
+        agg["associated_email_count"] = len(agg["emails"])
+        
+        # Stats are computed BEFORE filtering so the dashboard shows the overall universe
+        stats["total"] += 1
+        t = agg["ioc_type"].lower()
+        if t in stats:
+            stats[t] += 1
+        
+        # Apply filters
+        if ioc_type and agg["ioc_type"].lower() != ioc_type.lower():
+            continue
+            
+        if verdict and agg["verdict"].lower() != verdict.lower():
+            continue
+            
+        if search and search.lower() not in val.lower():
+            continue
+            
+        final_iocs.append(agg)
+        
+    # Sort by last_seen descending
+    final_iocs.sort(key=lambda x: x["last_seen"] if x["last_seen"] else datetime.min, reverse=True)
+    
+    return {
+        "iocs": final_iocs,
+        "stats": stats
+    }
+
 @app.get("/api/dashboard/summary", response_model=DashboardSummarySchema)
-def get_dashboard_summary(db: Session = Depends(get_db)):
+def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Return aggregated statistics and recent data for the dashboard."""
     # We load all forensic records for calculating accurate stats (in production we'd use optimized queries)
     # But since this is SQLite and a small demo, this is fine. Or we can query JSON fields using SQLAlchemy if supported.
     # For now, let's just do it in python memory for safety since JSON querying in SQLite is sometimes tricky.
     
     # Get total emails
-    total_emails = db.query(Email).count()
+    total_emails = db.query(Email).join(EmailAccount).filter(EmailAccount.user_id == current_user.id).count()
     
     threats_detected = 0
     high_risk = 0
@@ -182,7 +499,7 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
     threat_dist = {}
     ioc_summ = {}
     
-    all_fa = db.query(ForensicAnalysisRecord).all()
+    all_fa = db.query(ForensicAnalysisRecord).join(Email).join(EmailAccount).filter(EmailAccount.user_id == current_user.id).all()
     for fa in all_fa:
         if not fa.analysis:
             continue
@@ -235,7 +552,7 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
             threats_detected += 1
                 
     # Get recent investigations
-    recent_emails = db.query(Email).order_by(Email.received_at.desc()).limit(5).all()
+    recent_emails = db.query(Email).join(EmailAccount).filter(EmailAccount.user_id == current_user.id).order_by(Email.received_at.desc()).limit(5).all()
     recent_responses = []
     for email in recent_emails:
         resp = EmailResponse.model_validate(email)
@@ -272,6 +589,7 @@ async def upload_email(
         ),
     ),
     db: Session=Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload and parse a single .eml file.
 
@@ -282,32 +600,24 @@ async def upload_email(
     Returns the parsed and stored email record with forensic analysis.
     """
     if email_account_id is None:
-        # Development fallback logic
-        dev_user = db.query(User).filter_by(email="dev@mailforensics.local").first()
-        if not dev_user:
-            dev_user = User(email="dev@mailforensics.local", name="Development User")
-            db.add(dev_user)
-            db.commit()
-            db.refresh(dev_user)
-
+        # Development fallback safely scoped to the authenticated user
         dev_account = db.query(EmailAccount).filter_by(
-            user_id=dev_user.id, provider="manual_upload"
+            user_id=current_user.id, provider="manual_upload"
         ).first()
         if not dev_account:
             dev_account = EmailAccount(
-                user_id=dev_user.id,
+                user_id=current_user.id,
                 provider="manual_upload",
-                email_address="upload@mailforensics.local"
+                email_address=f"upload_{current_user.id}@mailforensics.local"
             )
             db.add(dev_account)
             db.commit()
             db.refresh(dev_account)
         email_account_id = dev_account.id
     else:
-        # Preserve existing validation (if any tests expect failures for bad explicit IDs,
-        # but previously there was none. We can verify it exists if we want to be safe).
+        # Verify ownership
         account = db.query(EmailAccount).filter_by(id=email_account_id).first()
-        if not account:
+        if not account or account.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="EmailAccount not found")
 
     # Validate filename
@@ -366,62 +676,62 @@ async def upload_email(
 
 from gmail_client import sync_gmail_messages, GmailAPIError  # noqa: E402
 
-@app.get("/api/gmail/{email_account_id}/messages")
-def gmail_fetch_messages(
-    email_account_id: int,
-    limit: int = 10,
-    db: Session = Depends(get_db),
-):
-    """Retrieve Gmail messages for an authorized EmailAccount.
 
-    Fetches up to *limit* messages from the Gmail API, converts them
-    through the existing email parser, and persists them as Email rows.
-
-    Does NOT run forensic analysis — that will be connected later.
-
-    Args:
-        email_account_id: The EmailAccount to fetch messages for.
-        limit:            Maximum messages to fetch (default 10, max 50).
-    """
-    # Verify account exists
-    account = db.query(EmailAccount).filter_by(id=email_account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="EmailAccount not found")
-
-    # Verify it's a Gmail account
-    if account.provider != "gmail":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Account {email_account_id} is not a Gmail account "
-                   f"(provider: {account.provider})",
-        )
-
-    # Verify we have an access token
-    if not account.access_token:
-        raise HTTPException(
-            status_code=400,
-            detail="Gmail account has no access token — re-authorize first",
-        )
-
-    # Sync messages
+def run_sync_job(account_id: int, access_token: str, limit: int):
+    from database import SessionLocal
+    from gmail_client import sync_gmail_messages
+    db = SessionLocal()
     try:
         result = sync_gmail_messages(
-            account_id=account.id,
-            access_token=account.access_token,
+            account_id=account_id,
+            access_token=access_token,
             db_session=db,
             limit=limit,
         )
+        if result.errors:
+            finish_sync(account_id, status="completed", errors=result.errors)
+        else:
+            finish_sync(account_id, status="completed")
     except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Gmail sync failed: {exc}",
-        )
+        finish_sync(account_id, status="failed", errors=[str(exc)])
+    finally:
+        db.close()
 
-    return {
-        "message": "Gmail messages synced",
-        "email_account_id": account.id,
-        "fetched": result.fetched,
-        "persisted": result.persisted,
-        "skipped_duplicate": result.skipped_duplicate,
-        "errors": result.errors,
-    }
+
+@app.post("/api/gmail/{email_account_id}/messages")
+def gmail_fetch_messages(
+    email_account_id: int,
+    background_tasks: BackgroundTasks,
+    limit: int = 15,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Trigger asynchronous Gmail message synchronization."""
+    account = db.query(EmailAccount).filter_by(id=email_account_id).first()
+    if not account or account.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="EmailAccount not found")
+
+    if account.provider != "gmail":
+        raise HTTPException(status_code=400, detail="Not a Gmail account")
+
+    if not account.access_token:
+        raise HTTPException(status_code=400, detail="No access token")
+
+    if not start_sync(account.id):
+        raise HTTPException(status_code=409, detail="A sync is already in progress for this account")
+
+    background_tasks.add_task(run_sync_job, account.id, account.access_token, limit)
+
+    return {"message": "Sync started", "email_account_id": account.id}
+
+@app.get("/api/gmail/{email_account_id}/sync-status", response_model=SyncStatusResponse)
+def get_gmail_sync_status(
+    email_account_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    account = db.query(EmailAccount).filter_by(id=email_account_id).first()
+    if not account or account.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="EmailAccount not found")
+    
+    return get_sync_status(account.id)

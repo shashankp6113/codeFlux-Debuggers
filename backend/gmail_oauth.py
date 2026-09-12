@@ -85,7 +85,7 @@ def get_oauth_config() -> OAuthConfig:
 # Authorization URL
 # ---------------------------------------------------------------------------
 
-def build_authorization_url(config: OAuthConfig) -> str:
+def build_authorization_url(config: OAuthConfig, state: str = None) -> str:
     """Build the Google OAuth 2.0 authorization URL.
 
     Requests offline access so a refresh token is included in the
@@ -93,6 +93,7 @@ def build_authorization_url(config: OAuthConfig) -> str:
 
     Args:
         config: OAuth application credentials.
+        state: Optional CSRF protection state string.
 
     Returns:
         The full authorization URL the user should be redirected to.
@@ -105,7 +106,10 @@ def build_authorization_url(config: OAuthConfig) -> str:
         "access_type": "offline",
         "prompt": "consent",
     }
+    if state:
+        params["state"] = state
     return f"{_GOOGLE_AUTH_URL}?{urlencode(params)}"
+
 
 
 # ---------------------------------------------------------------------------
