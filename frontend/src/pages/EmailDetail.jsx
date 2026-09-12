@@ -53,6 +53,31 @@ export default function EmailDetail() {
     loadEmail();
   }, [id]);
 
+  const handleRetryAI = async () => {
+    try {
+      setIsRetrying(true);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/emails/${id}/retry-ai`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+      if (!response.ok) {
+        throw new Error('Failed to retry AI analysis');
+      }
+      const data = await response.json();
+      setEmail(data);
+    } catch (err) {
+      console.error("AI Retry Error:", err);
+      alert("Failed to retry AI analysis. Please try again.");
+    } finally {
+      setIsRetrying(false);
+    }
+  };
+
+
   if (loading) {
     return (
       <div className="empty-state" style={{ minHeight: '60vh' }}>

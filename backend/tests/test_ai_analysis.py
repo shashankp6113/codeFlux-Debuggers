@@ -827,7 +827,7 @@ class TestGeminiProviderFactory:
         monkeypatch.setenv("GEMINI_API_KEY", "k")
         monkeypatch.delenv("GEMINI_MODEL", raising=False)
         provider = get_ai_provider()
-        assert provider._model == "gemini-1.5-flash"
+        assert provider._model == "gemini-3.6-flash"
 
 
 # ---------------------------------------------------------------------------
@@ -847,7 +847,7 @@ class TestGeminiProviderConfig:
 
     def test_default_model(self):
         p = GeminiAIProvider(api_key="fake_secret_key_123")
-        assert p._model == "gemini-1.5-flash"
+        assert p._model == "gemini-3.6-flash"
 
     def test_custom_model(self):
         p = GeminiAIProvider(api_key="k", model="gemini-custom")
