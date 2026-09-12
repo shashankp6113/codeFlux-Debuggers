@@ -384,6 +384,65 @@ class TestSyncGmailMessages:
         db.close()
 
 
+
+    def test_bcc_email_survives_gmail_sync(self, monkeypatch):
+        """A message with no To: header (Bcc) is successfully synced."""
+        messages = [{"id": "bcc111", "threadId": "thr1"}]
+        # No To: header
+        raw_bcc = b"Message-ID: <bcc@test>\r\nFrom: a@test\r\nSubject: Bcc Test\r\nDate: Thu, 10 Jul 2025 14:30:00 +0000\r\n\r\nBcc Body"
+        
+        def _mock_get(url, **kwargs):
+            if "bcc111" in url:
+                return _FakeResp(200, {"raw": _b64url(raw_bcc)})
+            if "/messages" in url:
+                return _FakeResp(200, {"messages": messages})
+            return _FakeResp(404)
+            
+        monkeypatch.setattr("httpx.get", _mock_get)
+        
+        db = TestSession()
+        acct_id = _seed_gmail_account()
+        
+        result = sync_gmail_messages(acct_id, "tok", db, limit=5)
+        
+        assert result.fetched == 1
+        assert result.persisted == 1
+        assert len(result.errors) == 0
+        
+        db_emails = db.query(Email).filter_by(email_account_id=acct_id).all()
+        assert len(db_emails) == 1
+        assert db_emails[0].recipient == "Undisclosed Recipients"
+        
+        db.close()
+
+    def test_malformed_date_email_survives_gmail_sync(self, monkeypatch):
+        """A message with an invalid Date header is successfully synced."""
+        messages = [{"id": "baddate111", "threadId": "thr1"}]
+        raw_bad = b"Message-ID: <bad@test>\r\nFrom: a@test\r\nTo: b@test\r\nDate: Not a Date\r\n\r\nBody"
+        
+        def _mock_get(url, **kwargs):
+            if "baddate111" in url:
+                return _FakeResp(200, {"raw": _b64url(raw_bad)})
+            if "/messages" in url:
+                return _FakeResp(200, {"messages": messages})
+            return _FakeResp(404)
+            
+        monkeypatch.setattr("httpx.get", _mock_get)
+        
+        db = TestSession()
+        acct_id = _seed_gmail_account()
+        
+        result = sync_gmail_messages(acct_id, "tok", db, limit=5)
+        
+        assert result.fetched == 1
+        assert result.persisted == 1
+        assert len(result.errors) == 0
+        
+        db_emails = db.query(Email).filter_by(email_account_id=acct_id).all()
+        assert len(db_emails) == 1
+        assert db_emails[0].received_at is None
+        
+        db.close()
     def test_email_persistence_failure_does_not_abort_sync(self, monkeypatch):
         """A failure to save one email to the database does not block subsequent valid emails."""
         messages = [

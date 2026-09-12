@@ -41,6 +41,15 @@ Content-Type: text/html; charset="utf-8"
 --boundary123--
 """
 
+MALFORMED_DATE_EML = b"""\
+To: bob@example.com
+Subject: Bad date
+Date: Not a date
+Content-Type: text/plain
+
+Body text.
+"""
+
 MISSING_FROM_EML = b"""\
 To: bob@example.com
 Subject: No sender
@@ -144,13 +153,7 @@ class TestParseEmlMultipart:
 class TestParseEmlErrors:
     """Tests for malformed .eml files."""
 
-    def test_missing_from_raises(self):
-        with pytest.raises(ValueError, match="From"):
-            parse_eml(MISSING_FROM_EML)
 
-    def test_missing_to_raises(self):
-        with pytest.raises(ValueError, match="To"):
-            parse_eml(MISSING_TO_EML)
 
     def test_empty_bytes_raises(self):
         with pytest.raises(ValueError):
@@ -180,3 +183,23 @@ class TestParseEmlMinimal:
     def test_minimal_received_at_none(self):
         result = parse_eml(MINIMAL_EML)
         assert result.received_at is None
+
+class TestParseEmlResilience:
+    """Tests for graceful handling of missing/malformed headers."""
+
+    def test_missing_to_header(self):
+        result = parse_eml(MISSING_TO_EML)
+        assert result.recipient == "Undisclosed Recipients"
+        assert result.sender == "alice@example.com"
+        assert "From: alice@example.com" in result.raw_headers
+
+    def test_missing_from_header(self):
+        result = parse_eml(MISSING_FROM_EML)
+        assert result.sender == "Unknown Sender"
+        assert result.recipient == "bob@example.com"
+        assert "To: bob@example.com" in result.raw_headers
+
+    def test_malformed_date_header(self):
+        result = parse_eml(MALFORMED_DATE_EML)
+        assert result.received_at is None
+        assert "Date: Not a date" in result.raw_headers

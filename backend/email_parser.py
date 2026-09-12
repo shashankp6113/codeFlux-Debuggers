@@ -40,24 +40,35 @@ def parse_eml(raw_bytes: bytes) -> ParsedEmail:
     """
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
 
-    sender = msg.get("From", "")
-    recipient = msg.get("To", "")
+    if not msg.keys():
+        raise ValueError("Invalid .eml file: no headers found.")
 
-    if not sender or not recipient:
-        raise ValueError(
-            "Invalid .eml file: missing required From and/or To headers."
-        )
+    sender = msg.get("From", "")
+    if not sender:
+        sender = "Unknown Sender"
+        
+    recipient = msg.get("To", "")
+    if not recipient:
+        recipient = "Undisclosed Recipients"
 
     # Parse the Date header into a datetime
     received_at: Optional[datetime] = None
-    date_str = msg.get("Date")
-    if date_str:
-        parsed = email.utils.parsedate_to_datetime(date_str)
-        # Normalise to UTC if timezone-aware, otherwise keep as-is
-        if parsed.tzinfo is not None:
-            received_at = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-        else:
-            received_at = parsed
+    try:
+        date_header = msg.get("Date")
+        if date_header:
+            # If policy automatically parsed it to a DateHeader
+            if hasattr(date_header, 'datetime'):
+                parsed = date_header.datetime
+            else:
+                parsed = email.utils.parsedate_to_datetime(str(date_header))
+                
+            # Normalise to UTC if timezone-aware, otherwise keep as-is
+            if parsed.tzinfo is not None:
+                received_at = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            else:
+                received_at = parsed
+    except Exception:
+        received_at = None
 
     # Extract body parts
     body_text: Optional[str] = None
