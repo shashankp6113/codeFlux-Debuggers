@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bell, Search, Settings, LogOut, ChevronDown, CheckCircle2 } from 'lucide-react';
+import { Bell, Search, Settings, LogOut, ChevronDown, CheckCircle2, Menu } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 
-export default function Header() {
+export default function Header({ toggleSidebar, collapsed }) {
   const { logout, emailAddress } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -78,7 +78,15 @@ export default function Header() {
 
   return (
     <header className="top-header">
-      <div className="header-title text-h2">
+      <div className="header-title text-h2" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <button 
+          className="icon-btn" 
+          onClick={toggleSidebar} 
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
+        >
+          <Menu size={20} strokeWidth={1.5} />
+        </button>
       </div>
       <div className="header-actions">
         <form 

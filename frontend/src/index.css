@@ -756,3 +756,52 @@ h2, .text-h2 {
   align-items: center;
   justify-content: center;
 }
+
+/* Collapsed Sidebar Styles */
+.sidebar {
+  transition: width 0.2s ease;
+}
+
+.app-layout.collapsed .sidebar {
+  width: 64px;
+}
+
+.app-layout.collapsed .sidebar-brand span {
+  display: none;
+}
+
+.app-layout.collapsed .sidebar-brand {
+  padding: 16px;
+  justify-content: center;
+}
+
+.app-layout.collapsed .nav-item span {
+  display: none;
+}
+
+.app-layout.collapsed .nav-item {
+  padding: 8px 0;
+  justify-content: center;
+}
+
+/* Tooltip on hover when collapsed */
+.app-layout.collapsed .nav-item {
+  position: relative;
+}
+
+.app-layout.collapsed .nav-item:hover::after {
+  content: attr(aria-label);
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  background-color: var(--bg-surface-hover);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 100;
+  border: 1px solid var(--border-base);
+  margin-left: 8px;
+}
