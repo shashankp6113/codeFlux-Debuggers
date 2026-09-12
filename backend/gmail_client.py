@@ -288,15 +288,23 @@ def sync_gmail_messages(
             raw_headers=parsed.raw_headers,
             received_at=parsed.received_at,
         )
-        db_session.add(db_email)
-        db_session.commit()
-        db_session.refresh(db_email)
-        result.persisted += 1
+        
+        try:
+            db_session.add(db_email)
+            db_session.commit()
+            db_session.refresh(db_email)
+            result.persisted += 1
+        except Exception as exc:
+            db_session.rollback()
+            result.errors.append(f"Message {ref.id}: failed to save to database: {exc}")
+            record_progress(account_id, failed=1)
+            continue
 
         try:
             run_email_analysis(parsed, db_email, db_session)
             record_progress(account_id, newly_added=1)
         except Exception as exc:
+            db_session.rollback()
             result.errors.append(f"Message {ref.id}: analysis failed: {exc}")
             record_progress(account_id, failed=1)
 

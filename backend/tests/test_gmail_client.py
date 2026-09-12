@@ -383,6 +383,142 @@ class TestSyncGmailMessages:
         assert analysis_exists
         db.close()
 
+
+    def test_email_persistence_failure_does_not_abort_sync(self, monkeypatch):
+        """A failure to save one email to the database does not block subsequent valid emails."""
+        messages = [
+            {"id": "msg_fail", "threadId": "thr1"},
+            {"id": "msg_ok", "threadId": "thr1"}
+        ]
+        
+        # Use a null byte to trigger a database DataError during commit
+        raw_fail = b"Message-ID: <fail@test>\r\nFrom: a@test\r\nTo: b@test\r\n\r\nBadBody\x00"
+        raw_ok = b"Message-ID: <ok@test>\r\nFrom: a@test\r\nTo: b@test\r\n\r\nGoodBody"
+        
+        list_resp = _FakeResp(200, {"messages": messages})
+        
+        def _mock_get(url, **kwargs):
+            if "msg_fail" in url:
+                return _FakeResp(200, {"raw": _b64url(raw_fail)})
+            if "msg_ok" in url:
+                return _FakeResp(200, {"raw": _b64url(raw_ok)})
+            if "/messages" in url:
+                return list_resp
+            return _FakeResp(404)
+            
+        monkeypatch.setattr("httpx.get", _mock_get)
+        
+        # We need to simulate a DB error on commit. SQLite might accept null bytes, 
+        # so we'll mock db_session.commit to throw an exception for the bad message.
+        import database
+        
+        
+        db = TestSession()
+        acct_id = _seed_gmail_account()
+        
+        commit_calls = []
+        def mock_commit():
+            # Check what's pending
+            new_emails = [obj for obj in db.new if isinstance(obj, Email)]
+            if new_emails and new_emails[0].message_id == "msg_fail":
+                raise Exception("Simulated DB DataError on insert")
+            db.commit()
+            
+        # We must monkeypatch the instance method of the session passed in
+        original_db_commit = db.commit
+        def db_commit_override():
+            new_emails = [obj for obj in db.new if isinstance(obj, Email)]
+            if new_emails and new_emails[0].message_id == "msg_fail":
+                raise Exception("Simulated DB DataError on insert")
+            original_db_commit()
+            
+        db.commit = db_commit_override
+
+        result = sync_gmail_messages(acct_id, "tok", db, limit=5)
+        
+        # Verify result counts
+        assert result.fetched == 2
+        assert result.persisted == 1  # only msg_ok
+        assert len(result.errors) == 1
+        assert "Simulated DB DataError" in result.errors[0]
+        assert "msg_fail" in result.errors[0]
+        
+        # Verify db contents
+        db_emails = db.query(Email).filter_by(email_account_id=acct_id).all()
+        assert len(db_emails) == 1
+        assert db_emails[0].message_id == "msg_ok"
+        
+        db.close()
+
+    def test_analysis_failure_rolls_back_and_continues(self, monkeypatch):
+        """If run_email_analysis fails (e.g. during its commit), it rolls back and sync continues."""
+        messages = [
+            {"id": "msg_analysis_fail", "threadId": "thr1"},
+            {"id": "msg_analysis_ok", "threadId": "thr1"}
+        ]
+        
+        raw_fail = b"Message-ID: <fail@test>\r\nFrom: a@test\r\nTo: b@test\r\n\r\nFailAnalysis"
+        raw_ok = b"Message-ID: <ok@test>\r\nFrom: a@test\r\nTo: b@test\r\n\r\nOkAnalysis"
+        
+        list_resp = _FakeResp(200, {"messages": messages})
+        
+        def _mock_get(url, **kwargs):
+            if "msg_analysis_fail" in url:
+                return _FakeResp(200, {"raw": _b64url(raw_fail)})
+            if "msg_analysis_ok" in url:
+                return _FakeResp(200, {"raw": _b64url(raw_ok)})
+            if "/messages" in url:
+                return list_resp
+            return _FakeResp(404)
+            
+        monkeypatch.setattr("httpx.get", _mock_get)
+        
+        db = TestSession()
+        acct_id = _seed_gmail_account()
+        
+        # We need to mock run_email_analysis to throw an exception that simulates a failed DB commit
+        # which puts the session in a pending rollback state
+        import analysis
+        original_run = analysis.run_email_analysis
+        
+        def mock_run_analysis(parsed, db_email, db_session):
+            if db_email.message_id == "msg_analysis_fail":
+                # Simulate a DB commit failure by forcing the session into an errored state
+                from sqlalchemy import text
+                try:
+                    db_session.execute(text("SELECT * FROM non_existent_table"))
+                except Exception:
+                    pass
+                # The session is now poisoned. We raise an exception like run_email_analysis would
+                raise Exception("Simulated run_email_analysis db.commit() failure")
+            else:
+                return original_run(parsed, db_email, db_session)
+                
+        monkeypatch.setattr(analysis, "run_email_analysis", mock_run_analysis)
+        
+        result = sync_gmail_messages(acct_id, "tok", db, limit=5)
+        
+        assert result.fetched == 2
+        # Both were persisted as emails successfully
+        assert result.persisted == 2
+        assert len(result.errors) == 1
+        assert "Simulated run_email_analysis db.commit() failure" in result.errors[0]
+        
+        # Verify db contents
+        db_emails = db.query(Email).filter_by(email_account_id=acct_id).order_by(Email.message_id).all()
+        assert len(db_emails) == 2
+        
+        # msg_analysis_fail should NOT have an analysis record (it is a zombie)
+        zombie = [e for e in db_emails if e.message_id == "msg_analysis_fail"][0]
+        has_analysis = db.query(ForensicAnalysis).filter_by(email_id=zombie.id).first() is not None
+        assert not has_analysis
+        
+        # msg_analysis_ok SHOULD have an analysis record
+        ok_msg = [e for e in db_emails if e.message_id == "msg_analysis_ok"][0]
+        has_analysis_ok = db.query(ForensicAnalysis).filter_by(email_id=ok_msg.id).first() is not None
+        assert has_analysis_ok
+        
+        db.close()
     def test_analysis_retry_failure_session_safety(self, monkeypatch):
         """Failed retries rollback and do not poison the session for subsequent valid emails."""
         messages = [
