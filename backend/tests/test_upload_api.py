@@ -1453,7 +1453,8 @@ def test_upload_with_ai_failure():
                 explanation=None,
                 recommended_actions=[],
                 provider="gemini",
-                error="Gemini rate limit exceeded (HTTP 429)"
+                error="Gemini rate limit exceeded (HTTP 429)",
+                error_category="quota_exceeded"
             )
             
     import pytest

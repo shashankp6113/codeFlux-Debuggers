@@ -577,7 +577,7 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
 # ---------------------------------------------------------------------------
 
 @app.post("/api/emails/upload", response_model=EmailResponse)
-async def upload_email(
+def upload_email(
     file: UploadFile=File(...),
     email_account_id: Optional[int]=Form(
         None,
@@ -628,7 +628,7 @@ async def upload_email(
         )
 
     # Read raw bytes
-    raw_bytes = await file.read()
+    raw_bytes = file.file.read()
     if not raw_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 

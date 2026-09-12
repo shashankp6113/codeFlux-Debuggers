@@ -492,6 +492,7 @@ def enrich_iocs(
     enrichments: List[EnrichmentResult] = []
     seen: Dict[tuple, None] = {}  # dedup by (type, normalised_value)
 
+    MAX_ENRICHABLE_IOCS = 15
     with provider:
         for ioc in ioc_result.iocs:
             # Skip non-enrichable types (e.g. email)
@@ -506,6 +507,17 @@ def enrich_iocs(
             dedup_key = (ioc.ioc_type, ioc.value.lower())
             if dedup_key in seen:
                 continue
+                
+            if len(seen) >= MAX_ENRICHABLE_IOCS:
+                enrichments.append(EnrichmentResult(
+                    ioc_type=ioc.ioc_type,
+                    ioc_value=ioc.value,
+                    verdict="not_enriched",
+                    provider=provider.name,
+                    error="Skipped due to MAX_ENRICHABLE_IOCS limit",
+                ))
+                continue
+                
             seen[dedup_key] = None
 
             # Call the provider, catching any unexpected exception

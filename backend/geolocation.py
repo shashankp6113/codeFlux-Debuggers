@@ -398,6 +398,7 @@ def geolocate_ips(
     if provider is None:
         provider = NoOpGeolocationProvider()
 
+    MAX_GEOLOCATION_IPS = 15
     results = []
     seen: dict = {}
 
@@ -408,6 +409,15 @@ def geolocate_ips(
         key = ioc.value.lower()
         if key in seen:
             continue
+        
+        if len(seen) >= MAX_GEOLOCATION_IPS:
+            results.append(GeolocationResult(
+                ip=ioc.value,
+                provider=provider.name,
+                error="Skipped due to MAX_GEOLOCATION_IPS limit",
+            ))
+            continue
+            
         seen[key] = None
 
         try:

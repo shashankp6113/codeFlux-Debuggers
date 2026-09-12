@@ -818,3 +818,23 @@ class TestIPWhoProviderInterface:
 
     def test_supports_ipv6(self):
         assert IPWhoProvider().supports("2001:4860:4860::8888")
+
+def test_geolocate_ips_limit():
+    from geolocation import geolocate_ips, IPGeolocationProvider, GeolocationResult
+    from ioc_extractor import IOCExtractionResult, IOC
+    
+    class FakeGeoProvider(IPGeolocationProvider):
+        @property
+        def name(self): return "fakegeo"
+        def geolocate(self, ip):
+            return GeolocationResult(ip=ip, provider="fakegeo")
+            
+    iocs = [IOC("ipv4", f"2.2.2.{i}", "body", "ctx") for i in range(20)]
+    result = geolocate_ips(IOCExtractionResult(iocs), FakeGeoProvider())
+    
+    assert len(result.results) == 20
+    ok = [r for r in result.results if r.error is None]
+    skipped = [r for r in result.results if r.error == "Skipped due to MAX_GEOLOCATION_IPS limit"]
+    
+    assert len(ok) == 15
+    assert len(skipped) == 5

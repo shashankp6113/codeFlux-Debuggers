@@ -128,14 +128,18 @@ export default function EmailDetail() {
             <h2 className="card-title"><Cpu size={16} strokeWidth={1.5} /> AI Forensic Analysis</h2>
             
             {ai.error ? (
-              <div style={{ backgroundColor: 'var(--status-critical-bg)', border: '1px solid var(--status-critical-border)', color: 'var(--status-critical-text)', padding: '1rem', borderRadius: '6px', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                <AlertTriangle size={20} strokeWidth={1.5} />
+              <div style={{ backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-base)', color: 'var(--text-secondary)', padding: '1rem', borderRadius: '6px', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                <Cpu size={20} strokeWidth={1.5} />
                 <div>
-                  <strong>AI Analysis Unavailable</strong>
+                  <strong style={{ color: 'var(--text-primary)' }}>Forensic analysis completed, but AI explanation unavailable</strong>
                   <div style={{ fontSize: '0.9rem', marginTop: '0.25rem' }}>
                     {ai.error_category === "quota_exceeded"
                       ? "The daily AI analysis quota for this prototype has been reached. Please try again after the quota resets."
-                      : "The AI provider failed to analyze this email. This may be due to rate limits or configuration issues."}
+                      : ai.error_category === "configuration_error"
+                      ? "The AI provider is not configured properly (missing or invalid API key)."
+                      : ai.error_category === "timeout"
+                      ? "The AI provider took too long to respond. This is a transient error; you can safely retry later."
+                      : "The AI provider encountered an unexpected failure and could not provide an explanation."}
                   </div>
                 </div>
               </div>

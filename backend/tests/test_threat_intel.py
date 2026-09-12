@@ -1577,3 +1577,27 @@ def test_enrichment_across_multiple_emails(monkeypatch):
     assert len(calls) == 1
     assert res1.enrichments[0].verdict == "malicious"
     assert res2.enrichments[0].verdict == "malicious"
+
+def test_enrich_iocs_limit():
+    from threat_intel import enrich_iocs, ThreatIntelProvider, EnrichmentResult
+    from ioc_extractor import IOCExtractionResult, IOC
+    
+    class FakeProvider(ThreatIntelProvider):
+        @property
+        def name(self): return "fake"
+        def enrich(self, ioc_type, ioc_value):
+            return EnrichmentResult(ioc_type=ioc_type, ioc_value=ioc_value, verdict="clean", provider="fake")
+        def close(self): pass
+        def supports(self, ioc_type): return True
+        
+    # Create 20 unique IPs
+    iocs = [IOC("ipv4", f"1.1.1.{i}", "body", "ctx") for i in range(20)]
+    result = enrich_iocs(IOCExtractionResult(iocs), FakeProvider())
+    
+    # 15 should be enriched, 5 should be skipped
+    assert len(result.enrichments) == 20
+    enriched = [e for e in result.enrichments if e.error is None]
+    skipped = [e for e in result.enrichments if e.error == "Skipped due to MAX_ENRICHABLE_IOCS limit"]
+    
+    assert len(enriched) == 15
+    assert len(skipped) == 5
