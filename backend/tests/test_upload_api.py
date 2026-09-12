@@ -58,6 +58,9 @@ def mock_gemini_globally(monkeypatch):
 def setup_db():
     """Create tables and seed a test EmailAccount for each test."""
     Base.metadata.create_all(bind=TEST_ENGINE)
+    old = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = _override_get_db
+    
     db = TestSession()
     # Seed test user + email account if not present
     user = db.query(User).first()
@@ -75,6 +78,10 @@ def setup_db():
         db.commit()
     db.close()
     yield
+    if old is not None:
+        app.dependency_overrides[get_db] = old
+    else:
+        app.dependency_overrides.pop(get_db, None)
     Base.metadata.drop_all(bind=TEST_ENGINE)
 
 
@@ -86,7 +93,7 @@ def _override_get_db():
         db.close()
 
 
-app.dependency_overrides[get_db] = _override_get_db
+
 client = TestClient(app)
 
 
