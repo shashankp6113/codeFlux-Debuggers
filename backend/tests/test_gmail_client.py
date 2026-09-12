@@ -341,6 +341,128 @@ class TestSyncGmailMessages:
         assert len(emails) == 1
         db.close()
 
+    def test_missing_analysis_retry(self, monkeypatch):
+        """Zombie emails (Email exists, no ForensicAnalysis) are retried."""
+        _mock_gmail_api(monkeypatch)
+        db = TestSession()
+        acct_id = _seed_gmail_account()
+        
+        # 1. Create the zombie email manually
+        from email_parser import parse_eml
+        parsed = parse_eml(SAMPLE_EML)
+        db_email = Email(
+            email_account_id=acct_id,
+            message_id=parsed.message_id,
+            sender=parsed.sender,
+            recipient=parsed.recipient,
+        )
+        db.add(db_email)
+        db.commit()
+        
+        # 2. Mock run_email_analysis to track calls
+        calls = []
+        import gmail_client
+        import analysis
+        import analysis
+        original_run = analysis.run_email_analysis
+        
+        def mock_run(parsed_arg, db_email_arg, db_arg):
+            calls.append(db_email_arg.id)
+            return original_run(parsed_arg, db_email_arg, db_arg)
+            
+        monkeypatch.setattr(analysis, "run_email_analysis", mock_run)
+        
+        # 3. Sync - should pick up the existing email and retry it
+        result = gmail_client.sync_gmail_messages(acct_id, "tok", db, limit=5)
+        
+        assert len(calls) == 1
+        assert result.persisted == 0
+        assert result.skipped_duplicate == 0
+        
+        analysis_exists = db.query(ForensicAnalysis).filter_by(email_id=db_email.id).first() is not None
+        assert analysis_exists
+        db.close()
+
+    def test_analysis_retry_failure_session_safety(self, monkeypatch):
+        """Failed retries rollback and do not poison the session for subsequent valid emails."""
+        messages = [
+            {"id": "aaa111", "threadId": "thr1"},
+            {"id": "bbb222", "threadId": "thr1"}
+        ]
+        
+        raw1 = b"Message-ID: <id1@test>\r\nFrom: a@test\r\nTo: b@test\r\n\r\nBody1"
+        raw2 = b"Message-ID: <id2@test>\r\nFrom: c@test\r\nTo: d@test\r\n\r\nBody2"
+        
+        list_resp = _FakeResp(200, {"messages": messages})
+        
+        def _mock_get(url, **kwargs):
+            if "aaa111" in url:
+                return _FakeResp(200, {"raw": _b64url(raw1)})
+            if "bbb222" in url:
+                return _FakeResp(200, {"raw": _b64url(raw2)})
+            if "/messages" in url:
+                return list_resp
+            return _FakeResp(404)
+            
+        monkeypatch.setattr("httpx.get", _mock_get)
+        
+        db = TestSession()
+        acct_id = _seed_gmail_account()
+        
+        # Pre-seed id1@test as a zombie
+        db_email1 = Email(email_account_id=acct_id, message_id="<id1@test>", sender="a@test", recipient="b@test")
+        db.add(db_email1)
+        db.commit()
+        
+        import gmail_client
+        import analysis
+        import analysis
+        original_run = analysis.run_email_analysis
+        
+        def mock_run(parsed_arg, db_email_arg, db_arg):
+            if parsed_arg.message_id == "<id1@test>":
+                raise ValueError("Simulated hard crash")
+            return original_run(parsed_arg, db_email_arg, db_arg)
+            
+        monkeypatch.setattr(analysis, "run_email_analysis", mock_run)
+        
+        result = gmail_client.sync_gmail_messages(acct_id, "tok", db, limit=5)
+        
+        assert len(result.errors) == 1
+        assert "Simulated hard crash" in result.errors[0]
+        assert result.persisted == 1 # id2
+        assert result.skipped_duplicate == 0
+        
+        assert db.query(ForensicAnalysis).filter_by(email_id=db_email1.id).first() is None
+        email2 = db.query(Email).filter_by(message_id="<id2@test>").first()
+        assert email2 is not None
+        assert db.query(ForensicAnalysis).filter_by(email_id=email2.id).first() is not None
+        
+        db.close()
+
+    def test_duplicate_detection_preservation(self, monkeypatch):
+        """Emails with ForensicAnalysis are cleanly skipped without calling analysis."""
+        _mock_gmail_api(monkeypatch)
+        db = TestSession()
+        acct_id = _seed_gmail_account()
+        
+        import gmail_client
+        import analysis
+        gmail_client.sync_gmail_messages(acct_id, "tok", db, limit=5)
+        
+        calls = []
+        def mock_run(parsed_arg, db_email_arg, db_arg):
+            calls.append(db_email_arg.id)
+            
+        monkeypatch.setattr(analysis, "run_email_analysis", mock_run)
+        
+        result = gmail_client.sync_gmail_messages(acct_id, "tok", db, limit=5)
+        
+        assert len(calls) == 0
+        assert result.persisted == 0
+        assert result.skipped_duplicate == 1
+        db.close()
+
     def test_empty_inbox(self, monkeypatch):
         _mock_gmail_api(monkeypatch, messages=[])
         db = TestSession()

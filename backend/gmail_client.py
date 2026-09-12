@@ -244,10 +244,27 @@ def sync_gmail_messages(
                 email_account_id=account_id,
                 message_id=parsed.message_id,
             ).first()
+            
             if existing:
-                result.skipped_duplicate += 1
-                record_progress(account_id, skipped=1)
-                continue
+                from models import ForensicAnalysis
+                has_analysis = db_session.query(ForensicAnalysis).filter_by(
+                    email_id=existing.id
+                ).first() is not None
+
+                if has_analysis:
+                    result.skipped_duplicate += 1
+                    record_progress(account_id, skipped=1)
+                    continue
+                else:
+                    # Zombie state self-healing: Email exists but analysis failed previously
+                    try:
+                        run_email_analysis(parsed, existing, db_session)
+                        record_progress(account_id, newly_added=1)
+                    except Exception as exc:
+                        db_session.rollback()
+                        result.errors.append(f"Message {ref.id}: analysis retry failed: {exc}")
+                        record_progress(account_id, failed=1)
+                    continue
 
         db_email = Email(
             email_account_id=account_id,
