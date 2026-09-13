@@ -7,7 +7,14 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import User
 
-JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev_fallback_secret_only_for_sih_prototype_32")
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").lower()
+
+if ENVIRONMENT == "production":
+    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+    if not JWT_SECRET_KEY:
+        raise ValueError("JWT_SECRET_KEY environment variable MUST be set in production mode.")
+else:
+    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev_fallback_secret_only_for_sih_prototype_32")
 
 if len(JWT_SECRET_KEY.encode("utf-8")) < 32:
     raise ValueError("JWT_SECRET_KEY must be at least 32 bytes long for secure HS256 signatures.")

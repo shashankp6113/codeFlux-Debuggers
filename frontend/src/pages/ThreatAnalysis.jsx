@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import { Loader, AlertTriangle, ShieldAlert, Search, Filter } from 'lucide-react';
+import { Loader, AlertTriangle, ShieldAlert, Filter } from 'lucide-react';
 
 export default function ThreatAnalysis() {
   const [threats, setThreats] = useState([]);
@@ -18,7 +18,7 @@ export default function ThreatAnalysis() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [riskLevel, classification]);
 
-  const fetchThreats = async () => {
+  async function fetchThreats() {
     try {
       setLoading(true);
       setError(null);
@@ -29,14 +29,13 @@ export default function ThreatAnalysis() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleFilter(e) {
+    e.preventDefault(); // useEffect handles the fetch on state change
   };
 
-  const handleFilter = (e) => {
-    e.preventDefault();
-    fetchThreats();
-  };
-
-  const getRiskColor = (risk) => {
+  function getRiskColor(risk) {
     switch(risk?.toLowerCase()) {
       case 'critical': return '#dc2626';
       case 'high': return 'var(--status-high-text)';

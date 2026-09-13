@@ -1,6 +1,8 @@
 from pydantic import BaseModel
-from typing import Dict, List, Optional
-import threading
+from typing import List, Optional
+from datetime import datetime, timedelta, timezone
+from sqlalchemy.exc import IntegrityError
+from models import EmailAccountSyncState
 
 class SyncStatusResponse(BaseModel):
     status: str  # "idle", "syncing", "completed", "failed"
@@ -11,40 +13,73 @@ class SyncStatusResponse(BaseModel):
     failed_count: int = 0
     errors: List[str] = []
 
-_sync_states: Dict[int, SyncStatusResponse] = {}
-_sync_lock = threading.Lock()
+def get_sync_status(account_id: int, db) -> SyncStatusResponse:
+    state = db.query(EmailAccountSyncState).filter_by(email_account_id=account_id).first()
+    if not state:
+        return SyncStatusResponse(status="idle")
+    return SyncStatusResponse(
+            status=state.status,
+            total_discovered=state.total_discovered,
+            processed=state.processed,
+            newly_added=state.newly_added,
+            skipped_duplicate=state.skipped_duplicate,
+            failed_count=state.failed_count,
+            errors=state.errors or []
+        )
 
-def get_sync_status(account_id: int) -> SyncStatusResponse:
-    with _sync_lock:
-        if account_id not in _sync_states:
-            return SyncStatusResponse(status="idle")
-        # Return a copy to avoid mutation issues during serialization
-        return _sync_states[account_id].model_copy()
+def _get_or_create_state_for_update(account_id: int, db) -> EmailAccountSyncState:
+    state = db.query(EmailAccountSyncState).filter_by(email_account_id=account_id).with_for_update().first()
+    if not state:
+        try:
+            db.begin_nested()
+            new_state = EmailAccountSyncState(email_account_id=account_id, status="idle")
+            db.add(new_state)
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+        state = db.query(EmailAccountSyncState).filter_by(email_account_id=account_id).with_for_update().first()
+    return state
 
-def start_sync(account_id: int) -> bool:
+def start_sync(account_id: int, db) -> bool:
     """Marks account as syncing. Returns False if already syncing."""
-    with _sync_lock:
-        current = _sync_states.get(account_id)
-        if current and current.status == "syncing":
+    state = _get_or_create_state_for_update(account_id, db)
+        
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if state.status == "syncing":
+        if state.updated_at and (now - state.updated_at) < timedelta(minutes=5):
+            db.rollback()
             return False
-        _sync_states[account_id] = SyncStatusResponse(status="syncing")
-        return True
+                
+    state.status = "syncing"
+    state.total_discovered = 0
+    state.processed = 0
+    state.newly_added = 0
+    state.skipped_duplicate = 0
+    state.failed_count = 0
+    state.errors = []
+    state.updated_at = now
 
-def finish_sync(account_id: int, status: str, errors: List[str] = None):
-    with _sync_lock:
-        if account_id in _sync_states:
-            _sync_states[account_id].status = status
-            if errors is not None:
-                _sync_states[account_id].errors.extend(errors)
+    db.commit()
+    return True
 
-def record_progress(account_id: int, total_discovered: int = None, newly_added: int = 0, skipped: int = 0, failed: int = 0):
-    with _sync_lock:
-        if account_id in _sync_states:
-            state = _sync_states[account_id]
-            if total_discovered is not None:
-                state.total_discovered = total_discovered
-            if newly_added or skipped or failed:
-                state.newly_added += newly_added
-                state.skipped_duplicate += skipped
-                state.failed_count += failed
-                state.processed += (newly_added + skipped + failed)
+def finish_sync(account_id: int, db, status: str, errors: List[str] = None):
+    state = _get_or_create_state_for_update(account_id, db)
+    state.status = status
+    if errors:
+        current_errors = list(state.errors) if state.errors else []
+        current_errors.extend(errors)
+        state.errors = current_errors
+    state.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.commit()
+
+def record_progress(account_id: int, db, total_discovered: int = None, newly_added: int = 0, skipped: int = 0, failed: int = 0):
+    state = _get_or_create_state_for_update(account_id, db)
+    if total_discovered is not None:
+        state.total_discovered = total_discovered
+    if newly_added or skipped or failed:
+        state.newly_added += newly_added
+        state.skipped_duplicate += skipped
+        state.failed_count += failed
+        state.processed += (newly_added + skipped + failed)
+    state.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.commit()

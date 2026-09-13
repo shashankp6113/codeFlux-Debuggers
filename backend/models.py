@@ -19,7 +19,7 @@ class EmailAccount(Base):
     __tablename__="email_accounts"
 
     id=Column(Integer,primary_key=True,index=True)
-    user_id=Column(Integer,ForeignKey("users.id"),nullable=False)
+    user_id=Column(Integer,ForeignKey("users.id"),nullable=False,index=True)
     provider=Column(String,nullable=False)
     email_address=Column(String,nullable=False)
     access_token=Column(String,nullable=True)
@@ -27,6 +27,7 @@ class EmailAccount(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
 
     user=relationship("User",back_populates="email_accounts")
+    sync_state = relationship("EmailAccountSyncState", back_populates="account", uselist=False, cascade="all, delete-orphan")
     emails=relationship("Email",back_populates="email_account", cascade="all, delete-orphan")
 
 
@@ -47,7 +48,7 @@ class Email(Base):
     body_text=Column(Text,nullable=True)
     body_html=Column(Text,nullable=True)
     raw_headers=Column(Text,nullable=True)
-    received_at=Column(DateTime,nullable=True)
+    received_at=Column(DateTime,nullable=True,index=True)
     created_at=Column(DateTime,default=datetime.utcnow)
 
     email_account=relationship("EmailAccount",back_populates="emails")
@@ -70,3 +71,17 @@ class ForensicAnalysis(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
 
     email=relationship("Email",back_populates="forensic_analysis")
+class EmailAccountSyncState(Base):
+    __tablename__ = "email_account_sync_states"
+
+    email_account_id = Column(Integer, ForeignKey("email_accounts.id", ondelete="CASCADE"), primary_key=True)
+    status = Column(String, default="idle", nullable=False)
+    total_discovered = Column(Integer, default=0, nullable=False)
+    processed = Column(Integer, default=0, nullable=False)
+    newly_added = Column(Integer, default=0, nullable=False)
+    skipped_duplicate = Column(Integer, default=0, nullable=False)
+    failed_count = Column(Integer, default=0, nullable=False)
+    errors = Column(JSON, default=list, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    account = relationship("EmailAccount", back_populates="sync_state")

@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, Request, Response, Depends, File, Form, HTTPException, UploadFile, BackgroundTasks, Query
 from fastapi.responses import RedirectResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
 from database import get_db
 from auth import create_access_token, get_current_user
@@ -25,16 +25,53 @@ from gmail_oauth import (
     UserInfoError,
 )
 
+from fastapi.middleware.cors import CORSMiddleware
+import os
+
 app=FastAPI()
+
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").lower()
+FRONTEND_URL = os.environ.get("FRONTEND_URL")
+
+if ENVIRONMENT == "production" and FRONTEND_URL:
+    allowed_origins = [FRONTEND_URL]
+else:
+    allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]
+
+from fastapi import Response
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def root():
     return {"message":"MailForensics AI Backend is running"}
 
-@app.get("/db-test")
-def db_test(db: Session=Depends(get_db)):
-    db.execute(text("SELECT 1"))
-    return {"message":"Database connection successful"}
+@app.get("/health/live")
+def health_live():
+    return {"status": "ok"}
+
+@app.get("/health/ready")
+def health_ready(db: Session=Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ready"}
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
 
 # ---------------------------------------------------------------------------
@@ -219,13 +256,13 @@ def list_emails(
         query = query.filter(
             Email.subject.ilike(search_term) | Email.sender.ilike(search_term)
         )
+    query = query.options(joinedload(Email.forensic_analysis))
     emails = query.order_by(Email.received_at.desc()).limit(limit).all()
     responses = []
     for email in emails:
         resp = EmailResponse.model_validate(email)
-        fa = db.query(ForensicAnalysisRecord).filter_by(email_id=email.id).first()
-        if fa and fa.analysis:
-            resp.forensics = ForensicAnalysisSchema.model_validate(fa.analysis)
+        if email.forensic_analysis and email.forensic_analysis.analysis:
+            resp.forensics = ForensicAnalysisSchema.model_validate(email.forensic_analysis.analysis)
         responses.append(resp)
     return responses
 
@@ -251,9 +288,8 @@ def get_email(
         raise HTTPException(status_code=404, detail="Email not found")
         
     resp = EmailResponse.model_validate(email)
-    fa = db.query(ForensicAnalysisRecord).filter_by(email_id=email.id).first()
-    if fa and fa.analysis:
-        resp.forensics = ForensicAnalysisSchema.model_validate(fa.analysis)
+    if email.forensic_analysis and email.forensic_analysis.analysis:
+        resp.forensics = ForensicAnalysisSchema.model_validate(email.forensic_analysis.analysis)
         
     return resp
 
@@ -275,9 +311,8 @@ def get_email_report(
         raise HTTPException(status_code=404, detail="Email report not found")
         
     resp = EmailResponse.model_validate(email)
-    fa = db.query(ForensicAnalysisRecord).filter_by(email_id=email.id).first()
-    if fa and fa.analysis:
-        resp.forensics = ForensicAnalysisSchema.model_validate(fa.analysis)
+    if email.forensic_analysis and email.forensic_analysis.analysis:
+        resp.forensics = ForensicAnalysisSchema.model_validate(email.forensic_analysis.analysis)
         
     return resp
 
@@ -575,18 +610,29 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
     threat_dist = {}
     ioc_summ = {}
     
-    all_fa = db.query(ForensicAnalysisRecord).join(Email).join(EmailAccount).filter(EmailAccount.user_id == current_user.id).all()
-    for fa in all_fa:
-        if not fa.analysis:
-            continue
-            
-        analysis = fa.analysis
+    import json
+    
+    # Optimized selective tuple query avoiding full ORM object instantiation
+    all_fa_data = db.query(
+        ForensicAnalysisRecord.analysis["threat_score"].label("threat_score"),
+        ForensicAnalysisRecord.analysis["ai_analysis"].label("ai_analysis"),
+        ForensicAnalysisRecord.analysis["ioc_extraction"].label("ioc_extraction"),
+        ForensicAnalysisRecord.analysis["threat_intelligence"].label("threat_intelligence")
+    ).join(Email, ForensicAnalysisRecord.email_id == Email.id)\
+     .join(EmailAccount, Email.email_account_id == EmailAccount.id)\
+     .filter(EmailAccount.user_id == current_user.id).all()
+     
+    for row in all_fa_data:
+        # SQLite JSON operators may return strings rather than dicts depending on SQLAlchemy config
+        threat_score_info = json.loads(row.threat_score) if isinstance(row.threat_score, str) else (row.threat_score or {})
+        ai_info = json.loads(row.ai_analysis) if isinstance(row.ai_analysis, str) else (row.ai_analysis or {})
+        ioc_info = json.loads(row.ioc_extraction) if isinstance(row.ioc_extraction, str) else (row.ioc_extraction or {})
+        ti_info = json.loads(row.threat_intelligence) if isinstance(row.threat_intelligence, str) else (row.threat_intelligence or {})
         
         # Check if email is a threat based on any engine
         is_threat = False
         
         # 1. Threat score / Risk level (deterministic)
-        threat_score_info = analysis.get("threat_score")
         if threat_score_info:
             risk = threat_score_info.get("risk_level", "low").lower()
             if risk in ["medium", "high", "critical"]:
@@ -599,7 +645,6 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
                 critical += 1
                 
         # 2. Threat distribution (AI classifications)
-        ai_info = analysis.get("ai_analysis")
         if ai_info:
             cls = ai_info.get("classification", "unknown").lower()
             threat_dist[cls] = threat_dist.get(cls, 0) + 1
@@ -607,14 +652,12 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
                 is_threat = True
             
         # 3. IOC summary and Threat Intel
-        ioc_info = analysis.get("ioc_extraction")
         if ioc_info:
             iocs = ioc_info.get("iocs", [])
             for ioc in iocs:
                 ioc_type = ioc.get("ioc_type", "unknown")
                 ioc_summ[ioc_type] = ioc_summ.get(ioc_type, 0) + 1
                 
-        ti_info = analysis.get("threat_intelligence")
         if ti_info:
             enrichments = ti_info.get("enrichments", [])
             for enrich in enrichments:
@@ -627,14 +670,20 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
         if is_threat:
             threats_detected += 1
                 
-    # Get recent investigations
-    recent_emails = db.query(Email).join(EmailAccount).filter(EmailAccount.user_id == current_user.id).order_by(Email.received_at.desc()).limit(5).all()
+    from sqlalchemy.orm import selectinload
+    # Get recent investigations avoiding N+1 queries
+    recent_emails = db.query(Email)\
+        .join(EmailAccount)\
+        .filter(EmailAccount.user_id == current_user.id)\
+        .options(selectinload(Email.forensic_analysis))\
+        .order_by(Email.received_at.desc())\
+        .limit(5).all()
+        
     recent_responses = []
     for email in recent_emails:
         resp = EmailResponse.model_validate(email)
-        fa = db.query(ForensicAnalysisRecord).filter_by(email_id=email.id).first()
-        if fa and fa.analysis:
-            resp.forensics = ForensicAnalysisSchema.model_validate(fa.analysis)
+        if email.forensic_analysis and email.forensic_analysis.analysis:
+            resp.forensics = ForensicAnalysisSchema.model_validate(email.forensic_analysis.analysis)
         recent_responses.append(resp)
         
     return {
@@ -921,11 +970,11 @@ def run_sync_job(account_id: int, access_token: str, limit: int):
             )
 
         if result.errors:
-            finish_sync(account_id, status="completed", errors=result.errors)
+            finish_sync(account_id, db, status="completed", errors=result.errors)
         else:
-            finish_sync(account_id, status="completed")
+            finish_sync(account_id, db, status="completed")
     except Exception as exc:
-        finish_sync(account_id, status="failed", errors=[str(exc)])
+        finish_sync(account_id, db, status="failed", errors=[str(exc)])
     finally:
         db.close()
 
@@ -949,7 +998,7 @@ def gmail_fetch_messages(
     if not account.access_token:
         raise HTTPException(status_code=400, detail="No access token")
 
-    if not start_sync(account.id):
+    if not start_sync(account.id, db):
         raise HTTPException(status_code=409, detail="A sync is already in progress for this account")
 
     background_tasks.add_task(run_sync_job, account.id, account.access_token, limit)
@@ -966,7 +1015,7 @@ def get_gmail_sync_status(
     if not account or account.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="EmailAccount not found")
     
-    return get_sync_status(account.id)
+    return get_sync_status(account.id, db)
 
 
 from pydantic import BaseModel

@@ -16,5 +16,5 @@ RUN chown -R appuser:appgroup /app
 # Switch to non-root user
 USER appuser
 
-# Run uvicorn
-CMD ["uvicorn","main:app","--host","0.0.0.0","--port","8000"]
+# Run alembic migrations and start uvicorn with 4 workers for production
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4"]

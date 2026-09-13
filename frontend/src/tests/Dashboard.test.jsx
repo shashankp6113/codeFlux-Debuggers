@@ -59,7 +59,7 @@ describe('Dashboard Sync Gmail Button', () => {
     renderDashboard(null);
     await waitFor(() => {
       expect(screen.queryByText('Sync Gmail')).not.toBeInTheDocument();
-      expect(screen.getAllByRole('button', { name: /Connect Gmail/i }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('button', { name: /Continue with Google/i }).length).toBeGreaterThan(0);
     });
   });
 
@@ -68,7 +68,7 @@ describe('Dashboard Sync Gmail Button', () => {
     await waitFor(() => {
       expect(screen.getByText('Sync Gmail')).toBeInTheDocument();
       expect(screen.getByText('Connected')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /Connect Gmail/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Continue with Google/i })).not.toBeInTheDocument();
     });
   });
 

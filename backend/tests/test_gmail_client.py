@@ -180,6 +180,9 @@ def _mock_gmail_api(monkeypatch, messages=None, raw_bytes=None):
         return _FakeResp(404)
 
     monkeypatch.setattr("httpx.get", _mock_get)
+    async def _mock_get_async(self, url, *args, **kwargs):
+        return _mock_get(url, *args, **kwargs)
+    monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +402,9 @@ class TestSyncGmailMessages:
             return _FakeResp(404)
             
         monkeypatch.setattr("httpx.get", _mock_get)
+        async def _mock_get_async(self, url, *args, **kwargs):
+            return _mock_get(url, *args, **kwargs)
+        monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
         
         db = TestSession()
         acct_id = _seed_gmail_account()
@@ -428,6 +434,9 @@ class TestSyncGmailMessages:
             return _FakeResp(404)
             
         monkeypatch.setattr("httpx.get", _mock_get)
+        async def _mock_get_async(self, url, *args, **kwargs):
+            return _mock_get(url, *args, **kwargs)
+        monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
         
         db = TestSession()
         acct_id = _seed_gmail_account()
@@ -466,6 +475,9 @@ class TestSyncGmailMessages:
             return _FakeResp(404)
             
         monkeypatch.setattr("httpx.get", _mock_get)
+        async def _mock_get_async(self, url, *args, **kwargs):
+            return _mock_get(url, *args, **kwargs)
+        monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
         
         # We need to simulate a DB error on commit. SQLite might accept null bytes, 
         # so we'll mock db_session.commit to throw an exception for the bad message.
@@ -531,6 +543,9 @@ class TestSyncGmailMessages:
             return _FakeResp(404)
             
         monkeypatch.setattr("httpx.get", _mock_get)
+        async def _mock_get_async(self, url, *args, **kwargs):
+            return _mock_get(url, *args, **kwargs)
+        monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
         
         db = TestSession()
         acct_id = _seed_gmail_account()
@@ -600,6 +615,9 @@ class TestSyncGmailMessages:
             return _FakeResp(404)
             
         monkeypatch.setattr("httpx.get", _mock_get)
+        async def _mock_get_async(self, url, *args, **kwargs):
+            return _mock_get(url, *args, **kwargs)
+        monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
         
         db = TestSession()
         acct_id = _seed_gmail_account()
@@ -673,6 +691,9 @@ class TestSyncGmailMessages:
         def _mock_get(*a, **kw):
             return _FakeResp(500)
         monkeypatch.setattr("httpx.get", _mock_get)
+        async def _mock_get_async(self, url, *args, **kwargs):
+            return _mock_get(url, *args, **kwargs)
+        monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
         db = TestSession()
         acct_id = _seed_gmail_account()
 
@@ -702,6 +723,9 @@ class TestSyncGmailMessages:
             return _FakeResp(200, {"raw": _b64url(SAMPLE_EML)})
 
         monkeypatch.setattr("httpx.get", _mock_get)
+        async def _mock_get_async(self, url, *args, **kwargs):
+            return _mock_get(url, *args, **kwargs)
+        monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
         db = TestSession()
         acct_id = _seed_gmail_account()
 
@@ -732,6 +756,9 @@ class TestSyncGmailMessages:
             return _FakeResp(404)
 
         monkeypatch.setattr("httpx.get", _mock_get)
+        async def _mock_get_async(self, url, *args, **kwargs):
+            return _mock_get(url, *args, **kwargs)
+        monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
         db = TestSession()
         acct_id = _seed_gmail_account()
 
@@ -825,6 +852,9 @@ def test_gmail_internal_id_deduplication(monkeypatch):
         return _FakeResp(404)
         
     monkeypatch.setattr("httpx.get", _mock_get)
+    async def _mock_get_async(self, url, *args, **kwargs):
+        return _mock_get(url, *args, **kwargs)
+    monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
     
     db = TestSession()
     acct_id = _seed_gmail_account()
@@ -864,6 +894,9 @@ def test_gmail_missing_rfc_message_id_deduplication(monkeypatch):
         return _FakeResp(404)
         
     monkeypatch.setattr("httpx.get", _mock_get)
+    async def _mock_get_async(self, url, *args, **kwargs):
+        return _mock_get(url, *args, **kwargs)
+    monkeypatch.setattr("httpx.AsyncClient.get", _mock_get_async)
     
     db = TestSession()
     acct_id = _seed_gmail_account()

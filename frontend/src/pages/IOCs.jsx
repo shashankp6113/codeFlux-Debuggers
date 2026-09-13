@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import { Loader, AlertTriangle, Search, Filter, ShieldAlert, Globe, Crosshair } from 'lucide-react';
+import { Loader, AlertTriangle, Filter, ShieldAlert, Globe, Crosshair } from 'lucide-react';
 
 export default function IOCs() {
   const [data, setData] = useState({ iocs: [], stats: {} });
@@ -18,7 +18,7 @@ export default function IOCs() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [iocType, verdict]);
 
-  const fetchIocs = async () => {
+  async function fetchIocs() {
     try {
       setLoading(true);
       setError(null);
@@ -29,16 +29,16 @@ export default function IOCs() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const handleFilter = (e) => {
+  function handleFilter(e) {
     e.preventDefault();
     fetchIocs();
   };
 
   const { iocs, stats } = data;
 
-  const getVerdictColor = (v) => {
+  function getVerdictColor(v) {
     switch (v?.toLowerCase()) {
       case 'malicious': return '#dc2626';
       case 'suspicious': return 'var(--status-high-text)';

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import { Search, Mail, Activity, ShieldAlert, ArrowRight, Loader } from 'lucide-react';
+import {Search,  Mail, Activity, ShieldAlert, ArrowRight, Loader } from 'lucide-react';
 
 export default function SearchResults() {
   const [searchParams] = useSearchParams();

@@ -75,6 +75,11 @@ def _create_mock_email(db, account_id, subject, risk_level, ai_classification, i
     """Helper to insert an email with some forensic data."""
     if iocs is None:
         iocs = []
+    # Ensure required fields for Pydantic schema
+    for ioc in iocs:
+        if "value" not in ioc: ioc["value"] = ioc.get("ioc_value", "unknown")
+        if "source" not in ioc: ioc["source"] = "mock"
+        if "context" not in ioc: ioc["context"] = "mock context"
     if threat_intel is None:
         threat_intel = []
         
@@ -196,6 +201,94 @@ class TestDashboardAPI:
             "malicious": 1
         }
         
+
+    def test_ioc_summary_and_missing_fields(self):
+        """GET /api/dashboard/summary handles exact IOC summary and missing fields gracefully."""
+        db = TestSession()
+        account = db.query(EmailAccount).first()
+        
+        # Email with some IOCs
+        _create_mock_email(db, account.id, "IOC Email 1", "low", "benign", iocs=[
+            {"ioc_type": "ip", "ioc_value": "1.1.1.1"},
+            {"ioc_type": "ip", "ioc_value": "2.2.2.2"},
+            {"ioc_type": "domain", "ioc_value": "example.com"}
+        ])
+        
+        # Email with overlapping IOC types
+        _create_mock_email(db, account.id, "IOC Email 2", "low", "benign", iocs=[
+            {"ioc_type": "domain", "ioc_value": "test.com"},
+            {"ioc_type": "hash", "ioc_value": "abcdef"}
+        ])
+        
+        # Email with completely missing analysis fields (to simulate old/corrupt data)
+        email_missing = Email(
+            email_account_id=account.id,
+            message_id="<missing@test.local>",
+            subject="Missing Fields",
+            sender="sender@example.com",
+            recipient="recipient@example.com",
+        )
+        db.add(email_missing)
+        db.commit()
+        db.refresh(email_missing)
+        
+        fa_missing = ForensicAnalysisRecord(
+            email_id=email_missing.id,
+            analysis={"random_other_field": "test"} # Missing all 4 required fields
+        )
+        db.add(fa_missing)
+        db.commit()
+        
+        db.close()
+        
+        r = client.get("/api/dashboard/summary", headers={"Authorization": f"Bearer {create_access_token(1)}"})
+        assert r.status_code == 200
+        data = r.json()
+        
+        assert data["ioc_summary"] == {
+            "ip": 2,
+            "domain": 2,
+            "hash": 1
+        }
+        assert data["total_emails"] == 3
+        
+    def test_user_isolation(self):
+        """GET /api/dashboard/summary isolates data per user."""
+        db = TestSession()
+        
+        # User 1 is created by the fixture. Create User 2.
+        user2 = User(email="user2@example.com", name="User 2")
+        db.add(user2)
+        db.commit()
+        
+        account2 = EmailAccount(user_id=user2.id, provider="gmail", email_address="user2@example.com")
+        db.add(account2)
+        db.commit()
+        
+        # User 2 gets a critical email
+        _create_mock_email(db, account2.id, "User 2 Critical", "critical", "malicious")
+        
+        # User 1 gets a benign email
+        account1 = db.query(EmailAccount).filter_by(user_id=1).first()
+        _create_mock_email(db, account1.id, "User 1 Benign", "low", "benign")
+        
+        user2_id = user2.id
+        db.close()
+        
+        # Request as User 1
+        r1 = client.get("/api/dashboard/summary", headers={"Authorization": f"Bearer {create_access_token(1)}"})
+        data1 = r1.json()
+        assert data1["total_emails"] == 1
+        assert data1["critical"] == 0
+        
+        # Request as User 2
+        user2_id = 2 # hardcoded or extracted before close
+        r2 = client.get("/api/dashboard/summary", headers={"Authorization": f"Bearer {create_access_token(user2_id)}"})
+        data2 = r2.json()
+        assert data2["total_emails"] == 1
+        assert data2["critical"] == 1
+
+
     def test_get_emails_ordering_and_limit(self):
         """GET /api/emails respects ordering and limit."""
         db = TestSession()

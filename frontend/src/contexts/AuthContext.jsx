@@ -3,42 +3,55 @@ import { useNavigate } from 'react-router-dom';
 
 const AuthContext = createContext();
 
+function safeGetItem(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch (e) {
+    console.error("localStorage access error:", e);
+    return null;
+  }
+}
+
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(localStorage.getItem('token'));
-  const [emailAccountId, setEmailAccountId] = useState(localStorage.getItem('email_account_id'));
-  const [emailAddress, setEmailAddress] = useState(localStorage.getItem('email_address'));
+  const [token, setToken] = useState(() => safeGetItem('token'));
+  const [emailAccountId, setEmailAccountId] = useState(() => safeGetItem('email_account_id'));
+  const [emailAddress, setEmailAddress] = useState(() => safeGetItem('email_address'));
   const navigate = useNavigate();
 
   const login = (newToken, newEmailAccountId, newEmailAddress) => {
-    localStorage.setItem('token', newToken);
+    try {
+      localStorage.setItem('token', newToken);
+      if (newEmailAccountId) localStorage.setItem('email_account_id', newEmailAccountId);
+      if (newEmailAddress) localStorage.setItem('email_address', newEmailAddress);
+    } catch(e) {
+      console.error("localStorage set error:", e);
+    }
     setToken(newToken);
-    if (newEmailAccountId) {
-      localStorage.setItem('email_account_id', newEmailAccountId);
-      setEmailAccountId(newEmailAccountId);
-    }
-    if (newEmailAddress) {
-      localStorage.setItem('email_address', newEmailAddress);
-      setEmailAddress(newEmailAddress);
-    }
+    if (newEmailAccountId) setEmailAccountId(newEmailAccountId);
+    if (newEmailAddress) setEmailAddress(newEmailAddress);
     navigate('/');
   };
 
   const updateEmailAccountId = (id) => {
-    localStorage.setItem('email_account_id', id);
+    try {
+      localStorage.setItem('email_account_id', id);
+    } catch(e) {}
     setEmailAccountId(id);
   };
 
-
   const disconnectAccount = () => {
-    localStorage.removeItem('email_account_id');
+    try {
+      localStorage.removeItem('email_account_id');
+    } catch(e) {}
     setEmailAccountId(null);
   };
 
   const logout = () => {
-
-    localStorage.removeItem('token');
-    localStorage.removeItem('email_account_id');
-    localStorage.removeItem('email_address');
+    try {
+      localStorage.removeItem('token');
+      localStorage.removeItem('email_account_id');
+      localStorage.removeItem('email_address');
+    } catch(e) {}
     setToken(null);
     setEmailAccountId(null);
     setEmailAddress(null);

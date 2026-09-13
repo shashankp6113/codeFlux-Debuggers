@@ -106,6 +106,7 @@ def test_sync_deduplication_works(db_session, monkeypatch):
     # Mock gmail API
     monkeypatch.setattr("gmail_client.list_message_ids", lambda *a, **k: [GmailMessageRef("gmsg1", "thrd1")])
     monkeypatch.setattr("gmail_client.get_raw_message", lambda *a, **k: b"Message-ID: <msg123@test.com>\r\nSubject: Test\r\nFrom: a@b.com\r\nTo: c@d.com\r\n\r\nBody")
+    monkeypatch.setattr("gmail_client.get_raw_messages_batch", lambda token, ids, *a, **k: {i: (b"Message-ID: <msg123@test.com>\r\nSubject: Test\r\nFrom: a@b.com\r\nTo: c@d.com\r\n\r\nBody", None) for i in ids})
 
     # Run sync first time
     res1 = sync_gmail_messages(acc.id, "fake", db_session)

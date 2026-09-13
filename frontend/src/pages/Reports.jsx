@@ -14,7 +14,7 @@ export default function Reports() {
     fetchEmails();
   }, []);
 
-  const fetchEmails = async () => {
+  async function fetchEmails() {
     try {
       setLoading(true);
       const data = await api.getEmails(100);
@@ -24,9 +24,9 @@ export default function Reports() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const handleSelectReport = async (id) => {
+  async function handleSelectReport(id) {
     try {
       setReportLoading(true);
       setError(null);
@@ -37,13 +37,13 @@ export default function Reports() {
     } finally {
       setReportLoading(false);
     }
-  };
+  }
 
-  const handlePrint = () => {
+  function handlePrint() {
     window.print();
   };
 
-  const handleExportCsv = () => {
+  function handleExportCsv() {
     if (!selectedReport || !selectedReport.forensics) return;
     
     let csvContent = "data:text/csv;charset=utf-8,";

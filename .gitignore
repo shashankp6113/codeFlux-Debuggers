@@ -3,3 +3,27 @@ __pycache__/
 *.pyc
 node_modules/
 .DS_Store
+*.db
+*.sqlite3
+
+# Development and scratch scripts
+patch_*.py
+fix_*.py
+debug_*.py
+check_*.py
+rewrite_*.py
+
+# Manual root-level test scripts (preserving official tests in backend/tests/)
+/test_*.py
+/backend/test_*.py
+
+# Patches and temporary outputs
+*.patch
+*.diff
+*.tmp
+*test_output*.txt
+*_dump*.txt
+
+# Specific directories and secrets
+scratch_playwright/
+token.txt

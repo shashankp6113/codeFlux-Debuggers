@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Inbox, AlertTriangle, Loader, ShieldCheck, ShieldAlert } from 'lucide-react';
+import {Search,  Inbox, AlertTriangle, Loader, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { api } from '../lib/api';
 import UploadButton from '../components/UploadButton';
 
@@ -47,10 +47,10 @@ export default function Emails() {
     loadEmails();
   }, [q]);
 
-  const handleSearchSubmit = (e) => {
+  function handleSearchSubmit(e) {
     e.preventDefault();
     setSearchParams(searchQuery ? { q: searchQuery } : {});
-  };
+  }
 
   const filteredEmails = emails;
 

@@ -42,6 +42,12 @@ export default function Sidebar({ collapsed }) {
           );
         })}
       </nav>
+      {!collapsed && (
+        <div style={{ marginTop: 'auto', padding: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', gap: '10px', flexWrap: 'wrap', borderTop: '1px solid var(--border-color)' }}>
+          <NavLink to="/privacy" style={{ color: 'inherit', textDecoration: 'none' }}>Privacy Policy</NavLink>
+          <NavLink to="/terms" style={{ color: 'inherit', textDecoration: 'none' }}>Terms of Service</NavLink>
+        </div>
+      )}
     </aside>
   );
 }

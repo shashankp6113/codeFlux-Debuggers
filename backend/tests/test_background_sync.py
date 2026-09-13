@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from models import User, EmailAccount
 from auth import create_access_token
-from sync_manager import _sync_states, get_sync_status, start_sync, finish_sync
+from sync_manager import get_sync_status, start_sync, finish_sync
 
 
 TEST_ENGINE = create_engine(
@@ -23,6 +23,15 @@ TEST_ENGINE = create_engine(
     poolclass=StaticPool,
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=TEST_ENGINE)
+
+
+@pytest.fixture
+def db_session():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 def override_get_db():
     db = TestingSessionLocal()
@@ -53,7 +62,6 @@ def db_session():
     session.close()
     Base.metadata.drop_all(bind=TEST_ENGINE)
     # Clear sync state between tests
-    _sync_states.clear()
 
 @pytest.fixture(scope="function")
 def test_user(db_session):
@@ -71,7 +79,8 @@ def test_account(db_session, test_user):
     db_session.refresh(acc)
     return acc
 
-def test_sync_request_returns_quickly(test_user, test_account):
+def test_sync_request_returns_quickly(test_user, test_account, monkeypatch):
+    monkeypatch.setattr('main.run_sync_job', lambda *args, **kwargs: None)
     token = create_access_token(test_user.id)
     headers = {"Authorization": f"Bearer {token}"}
     
@@ -80,29 +89,31 @@ def test_sync_request_returns_quickly(test_user, test_account):
     assert response.status_code == 200
     assert response.json()["message"] == "Sync started"
 
-def test_cannot_start_concurrent_sync(test_user, test_account):
+def test_cannot_start_concurrent_sync(db_session, test_user, test_account, monkeypatch):
+    monkeypatch.setattr('main.run_sync_job', lambda *args, **kwargs: None)
     token = create_access_token(test_user.id)
     headers = {"Authorization": f"Bearer {token}"}
     
     # Start sync manually in state
-    start_sync(test_account.id)
+    start_sync(test_account.id, db_session)
     
     # Trigger sync
     response = client.post(f"/api/gmail/{test_account.id}/messages", headers=headers)
     assert response.status_code == 409
     assert "already in progress" in response.json()["detail"]
 
-def test_sync_status_endpoint(test_user, test_account):
+def test_sync_status_endpoint(db_session, test_user, test_account, monkeypatch):
+    monkeypatch.setattr('main.run_sync_job', lambda *args, **kwargs: None)
     token = create_access_token(test_user.id)
     headers = {"Authorization": f"Bearer {token}"}
     
-    start_sync(test_account.id)
+    start_sync(test_account.id, db_session)
     
     response = client.get(f"/api/gmail/{test_account.id}/sync-status", headers=headers)
     assert response.status_code == 200
     assert response.json()["status"] == "syncing"
     
-    finish_sync(test_account.id, status="completed")
+    finish_sync(test_account.id, db_session, status="completed")
     
     response = client.get(f"/api/gmail/{test_account.id}/sync-status", headers=headers)
     assert response.status_code == 200
@@ -169,7 +180,7 @@ def test_sync_refreshes_expired_access_token(db_session, test_user, monkeypatch)
     monkeypatch.setattr(gmail_oauth, "get_oauth_config", mock_config)
     
     acc_id = acc.id
-    start_sync(acc_id)
+    start_sync(acc_id, db_session)
     main.run_sync_job(acc_id, "expired", 5)
     
     assert len(calls) == 2
@@ -180,7 +191,7 @@ def test_sync_refreshes_expired_access_token(db_session, test_user, monkeypatch)
     assert acc.access_token == "new_access"
     assert acc.refresh_token == "new_rt"
     
-    status = get_sync_status(acc_id)
+    status = get_sync_status(acc_id, db_session)
     assert status.status == "completed"
 
 def test_sync_does_not_retry_401_more_than_once(db_session, test_user, monkeypatch):
@@ -221,12 +232,12 @@ def test_sync_does_not_retry_401_more_than_once(db_session, test_user, monkeypat
     monkeypatch.setattr(gmail_oauth, "get_oauth_config", mock_config)
     
     acc_id = acc.id
-    start_sync(acc_id)
+    start_sync(acc_id, db_session)
     main.run_sync_job(acc_id, "expired", 5)
     
     assert len(calls) == 2
     
-    status = get_sync_status(acc_id)
+    status = get_sync_status(acc_id, db_session)
     assert status.status == "failed"
     assert "401" in status.errors[0]
 
@@ -258,11 +269,11 @@ def test_sync_without_refresh_token(db_session, test_user, monkeypatch):
     monkeypatch.setattr(database, "SessionLocal", lambda: DummySession(db_session))
     
     acc_id = acc.id
-    start_sync(acc_id)
+    start_sync(acc_id, db_session)
     main.run_sync_job(acc_id, "expired", 5)
     
     assert len(calls) == 1
     
-    status = get_sync_status(acc_id)
+    status = get_sync_status(acc_id, db_session)
     assert status.status == "failed"
     assert "no refresh token is available" in status.errors[0]

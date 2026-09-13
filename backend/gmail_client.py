@@ -184,6 +184,73 @@ def get_raw_message(access_token: str, message_id: str) -> bytes:
         )
 
 
+
+import asyncio
+from typing import Tuple, Dict, Optional
+import httpx
+
+async def _fetch_raw_message_async(client: httpx.AsyncClient, access_token: str, message_id: str, semaphore: asyncio.Semaphore) -> Tuple[str, Optional[bytes], Optional[Exception]]:
+    async with semaphore:
+        url = f"{_GMAIL_API_BASE}/users/me/messages/{message_id}"
+        params = {"format": "raw"}
+        try:
+            resp = await client.get(
+                url,
+                headers=_auth_headers(access_token),
+                params=params,
+                timeout=_HTTP_TIMEOUT,
+            )
+            if resp.status_code == 401:
+                return message_id, None, GmailAuthError("Gmail API authentication failed (401)")
+            if resp.status_code == 429:
+                return message_id, None, GmailAPIError("Gmail API rate limit exceeded (429)")
+            if resp.status_code != 200:
+                return message_id, None, GmailAPIError(f"Gmail API error retrieving message {message_id} (HTTP {resp.status_code})")
+                
+            data = resp.json()
+            raw_b64 = data.get("raw")
+            if not raw_b64:
+                return message_id, None, GmailMessageError(f"Gmail message {message_id} has no 'raw' field")
+                
+            padded = raw_b64 + "=" * (4 - len(raw_b64) % 4)
+            return message_id, base64.urlsafe_b64decode(padded), None
+        except Exception as exc:
+            return message_id, None, GmailAPIError(f"Network error retrieving message {message_id}: {exc}")
+
+async def _fetch_all_raw_messages_async(access_token: str, message_ids: List[str], max_concurrent: int) -> Dict[str, Tuple[Optional[bytes], Optional[Exception]]]:
+    results = {}
+    semaphore = asyncio.Semaphore(max_concurrent)
+    async with httpx.AsyncClient() as client:
+        tasks = [
+            _fetch_raw_message_async(client, access_token, mid, semaphore)
+            for mid in message_ids
+        ]
+        completed = await asyncio.gather(*tasks)
+        for mid, raw_bytes, exc in completed:
+            results[mid] = (raw_bytes, exc)
+    return results
+
+def get_raw_messages_batch(access_token: str, message_ids: List[str], max_concurrent: int = 5) -> Dict[str, Tuple[Optional[bytes], Optional[Exception]]]:
+    """Bridge to async concurrent fetcher, safe for standard synchronous threads."""
+    if not message_ids:
+        return {}
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        # Fallback if somehow called from an active event loop
+        import threading
+        result = {}
+        def _run_in_thread():
+            nonlocal result
+            result = asyncio.run(_fetch_all_raw_messages_async(access_token, message_ids, max_concurrent))
+        t = threading.Thread(target=_run_in_thread)
+        t.start()
+        t.join()
+        return result
+    return asyncio.run(_fetch_all_raw_messages_async(access_token, message_ids, max_concurrent))
+
 # ---------------------------------------------------------------------------
 # Conversion: Gmail raw → ParsedEmail
 # ---------------------------------------------------------------------------
@@ -229,7 +296,7 @@ def sync_gmail_messages(
 
     try:
         refs = list_message_ids(access_token, max_results=effective_limit)
-        record_progress(account_id, total_discovered=len(refs))
+        record_progress(account_id, db_session, total_discovered=len(refs))
     except GmailAuthError:
         raise
     except GmailAPIError as exc:
@@ -252,40 +319,57 @@ def sync_gmail_messages(
         ).all()
         analysis_set = {fa[0] for fa in existing_analyses}
 
+    # Phase 1: Determine which refs actually need to be fetched
+    missing_refs = []
     for ref in refs:
         result.fetched += 1
-        
-        # Fast path deduplication before downloading raw bytes
         existing = existing_map.get(ref.id)
         if existing and existing.id in analysis_set:
             result.skipped_duplicate += 1
-            record_progress(account_id, skipped=1)
+            record_progress(account_id, db_session, skipped=1)
+            continue
+        missing_refs.append(ref)
+
+    # Release DB connection to pool during slow external HTTP batch fetch
+    db_session.commit()
+
+    # Bounded concurrent fetching of missing raw bytes (limit 5)
+    missing_ids = [ref.id for ref in missing_refs]
+    raw_results = get_raw_messages_batch(access_token, missing_ids, max_concurrent=5)
+
+    # Phase 2: Process sequentially (preserves sync AI/VT/DB limits)
+    for ref in missing_refs:
+        
+        raw_bytes, exc = raw_results.get(ref.id, (None, Exception("Failed to fetch message.")))
+        if exc:
+            if isinstance(exc, GmailAuthError):
+                raise exc # Preserve token refresh logic bubble-up
+            result.errors.append(f"Message {ref.id}: {exc}")
+            record_progress(account_id, db_session, failed=1)
             continue
             
         try:
-            raw_bytes = get_raw_message(access_token, ref.id)
             parsed = convert_raw_to_parsed(raw_bytes)
-        except GmailAuthError:
-            raise
-        except (GmailAPIError, GmailMessageError) as exc:
+        except GmailMessageError as exc:
             result.errors.append(f"Message {ref.id}: {exc}")
-            record_progress(account_id, failed=1)
+            record_progress(account_id, db_session, failed=1)
             continue
 
+        existing = existing_map.get(ref.id)
         if existing:
             if existing.id in analysis_set:
                 result.skipped_duplicate += 1
-                record_progress(account_id, skipped=1)
+                record_progress(account_id, db_session, skipped=1)
                 continue
             else:
                 # Zombie state self-healing: Email exists but analysis failed previously
                 try:
                     run_email_analysis(parsed, existing, db_session)
-                    record_progress(account_id, newly_added=1)
+                    record_progress(account_id, db_session, newly_added=1)
                 except Exception as exc:
                     db_session.rollback()
                     result.errors.append(f"Message {ref.id}: analysis retry failed: {exc}")
-                    record_progress(account_id, failed=1)
+                    record_progress(account_id, db_session, failed=1)
                 continue
 
         # If it doesn't exist, store it using Gmail's ref.id
@@ -310,15 +394,15 @@ def sync_gmail_messages(
         except Exception as exc:
             db_session.rollback()
             result.errors.append(f"Message {ref.id}: failed to save to database: {exc}")
-            record_progress(account_id, failed=1)
+            record_progress(account_id, db_session, failed=1)
             continue
 
         try:
             run_email_analysis(parsed, db_email, db_session)
-            record_progress(account_id, newly_added=1)
+            record_progress(account_id, db_session, newly_added=1)
         except Exception as exc:
             db_session.rollback()
             result.errors.append(f"Message {ref.id}: analysis failed: {exc}")
-            record_progress(account_id, failed=1)
+            record_progress(account_id, db_session, failed=1)
 
     return result
